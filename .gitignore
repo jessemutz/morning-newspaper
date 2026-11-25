@@ -8,3 +8,7 @@ __pycache__/
 kobo-articles/
 *.epub
 cover.jpg
+
+.DS_Store
+config.mac.json
+CLAUDE.local.md

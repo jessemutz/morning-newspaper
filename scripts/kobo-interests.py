@@ -50,7 +50,7 @@ GENERIC_NAMES = {
     "entertainment", "entertainment news", "movies and tv", "movies & tv", "movies/tv",
     "cinema", "streaming", "shows", "series", "hollywood", "filmmaking",
 }
-ALLOWED_KINDS = {"book", "author", "title", "franchise", "creator", "universe",
+ALLOWED_KINDS = {"book", "author", "title", "franchise", "creator", "universe", "topic",
                  "genre", "project", "recipe"}
 
 RULES = [
@@ -58,6 +58,9 @@ RULES = [
     "No generic movies/TV or entertainment-news items. Cover only the named titles, franchises, creators and universes.",
     "Kickstarter: at most one item. Genres are reading genres only.",
     "Items at most max_age_days old, one primer per topic, queue.txt and pinned.txt always included.",
+    "Books marked spoiler_sensitive are being read right now: never pick anything that could reveal "
+    "plot, twists or endings past progress_pct. Author interviews, craft essays and adaptation news "
+    "that stay clear of the plot are fine.",
 ]
 
 
@@ -116,6 +119,23 @@ def kobo_reading(cfg, now=None):
         out.append({"kind": "book", "name": r[0], "creator": ", ".join(authors),
                     "date": synced[:10], "progress_pct": round(progress, 1),
                     "why": f"Kobo sync, {round(progress)}% read, last synced {synced[:10]}"})
+    return out
+
+
+def koreader_reading(cfg, now=None):
+    """Books reported by the KOReader plugin (reading/state.json via paper_server.py).
+
+    Every book here is marked spoiler_sensitive: curation must not pick articles that
+    could reveal what happens past progress_pct."""
+    import koreader_state
+    out = []
+    for b in koreader_state.currently_reading(READING_DAYS, now):
+        pct = round((b.get("percent") or 0) * 100, 1)
+        date = datetime.fromtimestamp(b["updated"], timezone.utc).date().isoformat()
+        out.append({"kind": "book", "name": clean_title(b.get("title") or "Untitled"),
+                    "creator": b.get("authors") or "", "date": date, "progress_pct": pct,
+                    "chapter": b.get("chapter") or "", "spoiler_sensitive": True,
+                    "why": f"KOReader, {round(pct)}% read, last read {date}"})
     return out
 
 
@@ -256,6 +276,8 @@ def genre_core(cfg, books, own, leads):
     seeded from your own titles and your reading. Never a movies/tv category."""
     entries = [{"kind": "genre", "name": g, "date": today(), "why": "fixed core, reading genre"}
                for g in cfg["genres"]]
+    entries += [{"kind": "topic", "name": t, "date": today(), "why": "standing topic from config"}
+                for t in cfg.get("topics", [])]
     entries += leads
     for b in books:
         for a in filter(None, [x.strip() for x in b.get("creator", "").split(",")]):
@@ -410,14 +432,16 @@ def build(cfg, src):
         "inputs": inputs,
         "excluded_inputs": {k: "weight 0" for k in ZERO_WEIGHT},
         "always_included": [f"{DATA_DIR}/queue.txt (kobo: urls)", f"{DATA_DIR}/pinned.txt"],
-        "rules": RULES + list(cfg.get("extra_rules", [])),
+        "rules": RULES + ([f"Avoid these subjects: {', '.join(cfg['avoid_topics'])}."]
+                          if cfg.get("avoid_topics") else []) + list(cfg.get("extra_rules", [])),
     }
 
 
 def main():
     cfg = load_config()
     src = {
-        "kobo": lambda: kobo_reading(cfg),
+        "kobo": (lambda: koreader_reading(cfg)) if cfg.get("delivery") == "koreader"
+        else (lambda: kobo_reading(cfg)),
         "abs": abs_reading,
         "media_watch": lambda: media_watch_titles(cfg),
         "seerr": lambda: seerr_titles(cfg),

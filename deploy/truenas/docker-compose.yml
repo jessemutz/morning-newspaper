@@ -1,0 +1,30 @@
+# TrueNAS Scale: Apps -> Discover -> "Install via YAML" (or `docker compose up -d --build`).
+# Clone this repo onto a dataset first and point `build.context` at it.
+# Edit every /mnt/... path below to match your pool.
+x-paper: &paper
+  build:
+    context: /mnt/tank/apps/kobo-morning-paper          # this repo, cloned on the NAS
+    dockerfile: deploy/truenas/Dockerfile
+  image: morning-paper:local
+  restart: unless-stopped
+  environment:
+    TZ: America/Chicago                                 # your timezone: cron runs on it
+    PAPER_TOKEN: ${PAPER_TOKEN}                          # long random string; also typed into the plugin
+    LLAMA_API_KEY: ${LLAMA_API_KEY}                      # same value llama-server on the Mac uses
+    KAGI_API_KEY: ${KAGI_API_KEY}                        # optional: web search
+    HARDCOVER_API_KEY: ${HARDCOVER_API_KEY}              # optional: book lookups for recommendations
+  volumes:
+    - /mnt/tank/apps/morning-paper/config:/config        # holds config.json
+    - /mnt/tank/apps/morning-paper/data:/data            # data_dir
+    - /mnt/tank/books/calibre-library:/library:ro        # CWA's library (read-only!)
+    - /mnt/tank/apps/cwa/config:/cwa-config:ro           # CWA's config dir (app.db: shelves)
+
+services:
+  server:
+    <<: *paper
+    command: ["python", "/app/scripts/paper_server.py"]
+    ports:
+      - "8765:8765"
+  scheduler:
+    <<: *paper
+    command: ["supercronic", "/app/crontab"]

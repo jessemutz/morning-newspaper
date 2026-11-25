@@ -1,0 +1,3 @@
+# Times are in the container's TZ (set TZ in docker-compose.yml).
+# 05:15 the whole morning run; the Mac is woken at 05:05 (deploy/mac).
+15 5 * * * python /app/scripts/run_daily.py >> /data/run_daily.log 2>&1

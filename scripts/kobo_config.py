@@ -45,12 +45,56 @@ DEFAULTS = {
     "exclude_titles": [],
     "exclude_requesters": [],
     "genres": ["fiction", "fantasy"],
+    "topics": [],                         # non-book subjects you want covered, e.g. "woodworking"
+    "avoid_topics": [],                   # subjects to keep out (or cap), e.g. "crypto prices"
     "extra_rules": [],                    # extra plain-English rules appended to interests.json
     "lead_image_avoid_faces": True,       # skip photos with a prominent face for lead images
+    "article_images": True,               # embed article / podcast / book-cover images in the edition
     "library_owner": "1000:1000",         # uid:gid that owns your Calibre library
     "kickstarter_enabled": False,         # needs KOBO_IMAP_USER / KOBO_IMAP_PASSWORD
     "imap_host": "imap.gmail.com",
     "imap_folder": "[Gmail]/All Mail",
+
+    # --- KOReader delivery ------------------------------------------------------------
+    # "koreader": dated editions served to the KOReader plugin (server/paper_server.py).
+    # "kobo": the original single Calibre book refreshed over Calibre-Web Kobo Sync.
+    "delivery": "koreader",
+    "edition_title": "Morning Paper",     # file name prefix: "Morning Paper 2026-11-25.epub"
+    "editions_keep": 7,                   # editions kept on the server and listed in the manifest
+    "articles_per_edition": 10,
+    "server_host": "0.0.0.0",
+    "server_port": 8765,
+    # Calibre-Web-Automated (the library the Kindle's books come from). Paths are as the
+    # pipeline sees them (inside the container: mount the library read-only).
+    "cwa_url": "http://truenas.local:30437",
+    "cwa_app_db": "",                     # CWA's app.db (shelves); empty = no shelf sync
+    "kindle_shelf": "Kindle",             # books on this CWA shelf sync to the Kindle
+
+    # --- LLM (llama-server on the Mac, OpenAI-compatible) ---------------------------------
+    "llm_base_url": "http://127.0.0.1:1234/v1",   # API key comes from LLAMA_API_KEY
+    "llm_models": {"rank": "qwen3.6-35b-a3b-ud-q4_k_xl", "write": "qwen3.6-35b-a3b-ud-q4_k_xl"},
+    "llm_timeout": 600,
+
+    # --- Candidate sources ---------------------------------------------------------------
+    "feeds": [],                          # RSS/Atom URLs
+    "blog_pages": [],                     # sites without a known feed (feed is discovered, else links scraped)
+    "podcasts": [],                       # podcast RSS URLs (transcripts used when published)
+    "search_queries_max": 8,              # LLM-written web searches per day
+    "search_results_per_query": 6,
+    "kagi_enabled": True,                 # needs KAGI_API_KEY; falls back to SearXNG
+    "searxng_url": "",                    # e.g. http://truenas.local:8080 (json format enabled)
+    "candidates_per_feed": 15,
+    "followed_sources_weight": 0.3,       # share of the paper for feeds/blogs/podcasts you follow
+
+    # --- Sports & recommendations ------------------------------------------------------------
+    # [{"league": "NHL", "follow": ["Avalanche"]}, {"league": "F1", "follow": ["Max Verstappen", "Ferrari"]}]
+    "sports": [],
+    "recommendations": {"enabled": True, "per_type": 3},
+
+    # --- Book companion ---------------------------------------------------------------------
+    "companion_enabled": True,
+    "companion_max_chars": 120000,        # cap on the slice of book text sent per recap
+    "companion_safety_pct": 0.5,          # stop this many percent before the reader's position
 }
 
 

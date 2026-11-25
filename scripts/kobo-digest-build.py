@@ -188,7 +188,7 @@ def extract_article(url: str) -> dict:
         reason = " ".join(str(e).split()) or type(e).__name__
         raise ArticleFailure(f"fetch error ({reason})") from e
     html = trafilatura.extract(downloaded, output_format="html",
-                               include_links=False, include_images=False,
+                               include_links=False, include_images=bool(CFG["article_images"]),
                                with_metadata=False)
     if not html:
         raise ArticleFailure("no content extracted")
@@ -227,6 +227,11 @@ def store_new(urls: list[str]) -> tuple[int, list[tuple[str, str]]]:
         path = ARTICLES / f"{slugify(url)}.json"
         if path.exists():
             continue  # already have it; the digest is rebuilt from the full store
+        pre = BASE / "prebuilt" / path.name
+        if pre.exists():  # made by gather_candidates from feed content: no fetch
+            pre.replace(path)
+            added += 1
+            continue
         try:
             art = extract_article(url)
         except ArticleFailure as e:
@@ -261,6 +266,12 @@ def _fmt_date(a: dict) -> str:
         return m.group(0)
 
 
+def _section_key(a: dict):
+    """Edition order: reading companion pages, the news, then sports, then recommendations."""
+    group = 0 if a.get("pin_top") else (2 if a.get("pin_bottom") else 1)
+    return (group, a.get("pin_order", 0) if group != 1 else 0)
+
+
 def load_all_articles() -> list[dict]:
     arts = []
     for p in ARTICLES.glob("*.json"):
@@ -285,6 +296,7 @@ def load_all_articles() -> list[dict]:
     for a in stale:
         log(f"excluded stale ({_date_key(a)}, >{MAX_AGE_DAYS}d): {a.get('title','')[:50]}")
     fresh.sort(key=_date_key, reverse=True)  # newest first, by published date
+    fresh.sort(key=_section_key)  # reading companion first, sports and recommendations last
     return fresh
 
 
@@ -346,8 +358,11 @@ def _download_image(url):
     from PIL import Image
     import urllib.request
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        data = urllib.request.urlopen(req, timeout=10).read()
+        if url and not url.startswith(("http://", "https://")):
+            data = Path(url[7:] if url.startswith("file://") else url).read_bytes()  # a book cover
+        else:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            data = urllib.request.urlopen(req, timeout=10).read()
         return Image.open(BytesIO(data)).convert("L").convert("RGB")
     except Exception:
         return None
@@ -442,12 +457,13 @@ def generate_cover(articles: list[dict]) -> "Path | None":
             date = _d.strftime("%A, %B %d, %Y").upper()
         edition = _next_edition()
         d.text((M, y), f"VOL. I  ·  No. {edition}", font=small, fill=black)
-        d.text((W - M - d.textlength("READ LATER", font=small), y), "READ LATER", font=small, fill=black)
+        d.text((W - M - d.textlength("DAILY EDITION", font=small), y), "DAILY EDITION", font=small, fill=black)
         d.text(((W - d.textlength(date, font=small)) / 2, y), date, font=small, fill=black)
         y += 30
         d.line([(M, y), (W - M, y)], fill=black, width=1)
         y += 26
-        imgs = [a for a in articles if a.get("image")]
+        # article photos first; a book cover (companion page) only if nothing else has one
+        imgs = sorted((a for a in articles if a.get("image")), key=lambda a: bool(a.get("pin_top")))
         # the cover lead follows the same face-free rule
         _ff = [a for a in imgs if not _has_prominent_face(a.get("image"))]
         lead_art = (next((a for a in _ff if _photo_score(a.get("image")) > 30), None)
@@ -587,7 +603,7 @@ def build_front_page(book, articles: list[dict]):
     d.line([(M, y), (W - M, y)], fill=BLACK, width=1); y += 12
     small = _font(SERIF_R, 23)
     d.text((M, y), f"VOL. I   No. {edition}", font=small, fill=BLACK)
-    d.text((W - M - d.textlength("READ LATER", font=small), y), "READ LATER", font=small, fill=BLACK)
+    d.text((W - M - d.textlength("DAILY EDITION", font=small), y), "DAILY EDITION", font=small, fill=BLACK)
     d.text(((W - d.textlength(dateline, font=small)) / 2, y), dateline, font=small, fill=BLACK); y += 36
     d.line([(M, y), (W - M, y)], fill=BLACK, width=3); y += 20
     lead_i = idx[id(lead)] if lead else None
@@ -665,10 +681,85 @@ def build_front_page(book, articles: list[dict]):
     return fp
 
 
+IMG_MAX_W, IMG_MAX_H = 1000, 1300   # Kindle Paperwhite is 1236x1648; leave room for margins
+IMG_MIN_SIDE = 200                  # smaller is an icon, avatar or tracking pixel
+IMG_MAX_PER_ARTICLE = 6
+_IMG_DONE: dict = {}
+
+
+def _image_bytes(src: str) -> "bytes | None":
+    if src.startswith(("http://", "https://")):
+        try:
+            r = requests.get(src, timeout=15, headers={"User-Agent": ARTICLE_USER_AGENT})
+            if r.status_code == 200 and len(r.content) < 15_000_000:
+                return r.content
+        except requests.RequestException:
+            return None
+        return None
+    p = Path(src[7:] if src.startswith("file://") else src)  # local file: a book cover
+    return p.read_bytes() if p.is_file() else None
+
+
+def _epub_image(book, src: str) -> "str | None":
+    """Add one image to the EPUB (grayscale JPEG sized for e-ink); return its href or None."""
+    if src in _IMG_DONE:
+        return _IMG_DONE[src]
+    href = None
+    data = _image_bytes(src)
+    if data:
+        try:
+            import hashlib
+            from io import BytesIO
+            from PIL import Image, ImageOps
+            im = Image.open(BytesIO(data))
+            im = ImageOps.exif_transpose(im)
+            if min(im.size) >= IMG_MIN_SIDE:
+                im = im.convert("L")
+                im.thumbnail((IMG_MAX_W, IMG_MAX_H))
+                out = BytesIO()
+                im.save(out, "JPEG", quality=80, optimize=True)
+                href = f"img/{hashlib.sha1(src.encode()).hexdigest()[:14]}.jpg"
+                book.add_item(epub.EpubItem(uid=href.replace("/", "_").replace(".", "_"),
+                                            file_name=href, media_type="image/jpeg",
+                                            content=out.getvalue()))
+        except Exception:
+            href = None
+    _IMG_DONE[src] = href
+    return href
+
+
+def embed_images(book, a: dict) -> str:
+    """Article html with its images stored in the EPUB. Remote images that fail or are too
+    small are dropped. With no usable inline image, the article's lead image goes on top."""
+    import html as _h
+    import re as _re
+    count = 0
+
+    def figure(href):
+        return f'<div style="text-align:center;margin:.6em 0"><img src="{href}" alt="" style="max-width:100%"/></div>'
+
+    def sub(m):
+        nonlocal count
+        if count >= IMG_MAX_PER_ARTICLE:
+            return ""
+        href = _epub_image(book, _h.unescape(m.group(1)))
+        if not href:
+            return ""
+        count += 1
+        return figure(href)
+
+    body = _re.sub(r'<img\b[^>]*?\bsrc="([^"]+)"[^>]*>', sub, a["html"])
+    if count == 0 and a.get("image"):
+        href = _epub_image(book, a["image"])
+        if href:
+            body = figure(href) + body
+    return body
+
+
 def build_epub(articles: list[dict]) -> None:
     book = epub.EpubBook()
     book.set_identifier(f"read-later-{int(time.time())}")  # fresh id each build nudges Kobo Sync
-    book.set_title(BOOK_TITLE)
+    book.set_title(EDITION_BOOK_TITLE or BOOK_TITLE)
     book.set_language("en")
     book.add_author(BOOK_AUTHOR)
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -681,7 +772,7 @@ def build_epub(articles: list[dict]) -> None:
     chapters = []
     for i, a in enumerate(articles):
         full_min = reading_minutes(_text_words(a["html"]))
-        body_html = a["html"]
+        body_html = embed_images(book, a) if CFG["article_images"] else a["html"]
         if CAP_MINUTES and full_min > CAP_MINUTES:
             body_html = truncate_html(a["html"], CAP_MINUTES * WORDS_PER_MIN,
                                       a["url"], a["domain"])
@@ -711,7 +802,7 @@ def build_epub(articles: list[dict]) -> None:
         import re as _re2
         MIN_CHARS = 5200
         cur = len(_re2.sub(r"<[^>]+>", "", content))
-        if cur < MIN_CHARS:
+        if cur < MIN_CHARS and CFG["delivery"] == "kobo":
             filler_line = ("<p style='color:#c8c8c8;font-size:0.8em;margin:.2em 0'>"
                            f"{_hh.escape(PAPER_TITLE)} &middot; {_hh.escape(PAPER_TAGLINE)}</p>")
             unit = len(_re2.sub(r"<[^>]+>", "", filler_line))
@@ -785,6 +876,40 @@ def update_calibre_book() -> int:
     BOOK_ID_FILE.write_text(str(new_id))
     log(f"created Calibre book id {new_id}")
     return new_id
+
+
+EDITION_BOOK_TITLE = None  # set for KOReader editions: "Morning Paper — Nov 25, 2026"
+EDITIONS = BASE / "editions"
+SEEN = BASE / "seen.jsonl"
+
+
+def todays_articles(articles: list[dict], urls: list[str], today: str, cap: int) -> list[dict]:
+    """A dated edition: today's companion pages, then queued articles in queue (rank) order,
+    at most `cap` of them. Curation queues spares, so stale or failed picks are backfilled."""
+    sections = [a for a in articles if (a.get("pin_top") or a.get("pin_bottom")) and a.get("published") == today]
+    by_url = {a.get("url"): a for a in articles if not (a.get("pin_top") or a.get("pin_bottom"))}
+    queued = [by_url[u] for u in dict.fromkeys(urls) if u in by_url][:cap]
+    return sorted(sections + queued, key=_section_key)
+
+
+def publish_edition(articles: list[dict]) -> Path:
+    """KOReader delivery: build editions/<title> YYYY-MM-DD.epub, record shipped URLs, prune old ones."""
+    global EPUB_OUT, EDITION_BOOK_TITLE
+    now = datetime.now()
+    EDITIONS.mkdir(parents=True, exist_ok=True)
+    EPUB_OUT = EDITIONS / f"{CFG['edition_title']} {now:%Y-%m-%d}.epub"
+    EDITION_BOOK_TITLE = f"{CFG['edition_title']} \u2014 {now:%b %-d, %Y}"
+    build_epub(articles)
+    with SEEN.open("a") as f:
+        for a in articles:
+            if not (a.get("pin_top") or a.get("pin_bottom")):
+                f.write(json.dumps({"url": a["url"], "title": a.get("title", ""),
+                                    "date": now.date().isoformat()}) + "\n")
+    keep = int(CFG["editions_keep"])
+    for old in sorted(EDITIONS.glob("*.epub"), key=lambda p: p.name, reverse=True)[keep:]:
+        old.unlink()
+        log(f"pruned old edition {old.name}")
+    return EPUB_OUT
 
 
 CW_APP_DB = CFG["calibre_web_app_db"]  # Calibre-Web config (users/shelves/kobo sync)
@@ -875,6 +1000,16 @@ def main(argv=None) -> int:
     if failed:
         log("failed URLs: " + ", ".join(f"{reason}: {url}" for url, reason in failed))
     articles = load_all_articles()
+    if CFG["delivery"] == "koreader" and not dry:
+        articles = todays_articles(articles, urls, datetime.now().date().isoformat(),
+                                   int(CFG["articles_per_edition"]))
+        if not articles:
+            log("nothing new for today's edition; not publishing")
+            return 1
+        out = publish_edition(articles)
+        QUEUE.write_text("")
+        log(f"DONE: +{added} new, {len(failed)} failed, {len(articles)} in edition -> {out}")
+        return 0
     if not articles:
         log("no articles could be extracted; not touching Calibre")
         return 1
