@@ -70,9 +70,7 @@ def test_own_media_recent_by_newest_file(mods, tmp_path):
 
 def test_empty_inputs_give_weight_away(mods):
     src = {"kobo": lambda: [], "abs": lambda: (_ for _ in ()).throw(RuntimeError("off")),
-           "own_media": lambda: (_ for _ in ()).throw(RuntimeError("media_dirs not set")),
-           "tiktok": lambda: ([], {"status": "failed", "reason": "none"}),
-           "kickstarter": lambda: []}
+           "own_media": lambda: (_ for _ in ()).throw(RuntimeError("media_dirs not set"))}
     doc = mods.build({**mods.CFG, "topics": ["stoicism"]}, src)
     w = doc["weights"]
     assert w["topics"] == 1.0 and w["books_reading"] == 0 and w["own_media"] == 0
@@ -81,12 +79,11 @@ def test_empty_inputs_give_weight_away(mods):
 
 def test_weights_with_books_and_topics(mods):
     book = {"kind": "book", "name": "Blood Over Bright Haven", "creator": "M. L. Wang", "date": "2026-11-25"}
-    src = {"kobo": lambda: [book], "abs": lambda: [], "own_media": lambda: [],
-           "tiktok": lambda: ([], {"status": "failed", "reason": "none"}), "kickstarter": lambda: []}
+    src = {"kobo": lambda: [book], "abs": lambda: [], "own_media": lambda: []}
     doc = mods.build({**mods.CFG, "topics": ["stoicism"], "interest_weights": {"topics": 0.5}}, src)
     w = doc["weights"]
-    assert w["books_reading"] == pytest.approx(0.35 / 0.85, abs=1e-3)
-    assert w["topics"] == pytest.approx(0.5 / 0.85, abs=1e-3)
+    assert w["books_reading"] == pytest.approx(0.38 / 0.88, abs=1e-3)
+    assert w["topics"] == pytest.approx(0.5 / 0.88, abs=1e-3)
     names = [e["name"] for e in doc["inputs"]["books_reading"]["entries"]]
     assert names == ["Blood Over Bright Haven", "M. L. Wang"]
 

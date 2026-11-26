@@ -11,7 +11,7 @@ Kindle running KOReader with a custom plugin, a small HTTP server, a local LLM. 
    `koreader_reading()` reads `reading/state.json`; current books get `spoiler_sensitive: true`.
    Inputs: `books_reading` (+ their authors; the paper's own editions are skipped), `topics`
    (config; no `genres` any more), `own_media` (`media_dirs` recent additions, dated by newest
-   file inside: folder mtimes were bulk-touched), tiktok, kickstarter. Empty inputs give their
+   file inside: folder mtimes were bulk-touched). Empty inputs give their
    weight away in proportion; `interest_weights` overrides. `avoid_topics`/`extra_rules` become rules.
 3. `gather_candidates.py` → `candidates.jsonl`: `feeds`, `blog_pages` (feed discovery, else link scrape),
    `podcasts` (RSS URL or show name → Apple lookup cached in `podcast_feeds.json`; episodes are

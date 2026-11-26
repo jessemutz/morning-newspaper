@@ -117,11 +117,9 @@ Everything below describes `"delivery": "kobo"`.
 ## How it works
 
 1. **Interest model** (`scripts/kobo-interests.py`, 5:15 AM) reads up to five sources, read-only, and writes one file: `interests.json`.
-   - Reading 35%: what you are reading (the KOReader plugin's progress, or Kobo progress from Calibre-Web, plus Audiobookshelf) and those books' authors.
-   - Topics 45%: the `topics` list in `config.json`. Web search writes its queries mostly from these.
-   - Your media 12%: recent additions to the folders in `media_dirs` (newest file inside each item, last `media_recent_days`, minus `exclude_titles`).
-   - TikTok 5%: public TikTok collections, read with yt-dlp.
-   - Kickstarter 3%: backed projects, at most one item, from "You just backed" emails over IMAP.
+   - Reading 38%: what you are reading (the KOReader plugin's progress, or Kobo progress from Calibre-Web, plus Audiobookshelf) and those books' authors.
+   - Topics 49%: the `topics` list in `config.json`. Web search writes its queries mostly from these.
+   - Your media 13%: recent additions to the folders in `media_dirs` (newest file inside each item, last `media_recent_days`, minus `exclude_titles`).
    - An input that is not configured, fails, or has nothing in it gives its weight to the others in proportion, and `interests.json` says why. Override the split with `interest_weights`. Curation then reserves `followed_sources_weight` (default 0.3) of the paper for the feeds you follow.
 2. **Curation** (5:30 AM): an LLM reads `interests.json` and picks about 10 articles into `queue.txt`. This step is **yours to plug in**. See `curate.example.sh` for the contract. No curation agent ships in this repo.
 3. **Fetch + extract** (`scripts/kobo-digest-build.py`, 6:00 AM): trafilatura turns each URL into clean article text.
@@ -149,7 +147,7 @@ Everything below describes `"delivery": "kobo"`.
    python3 -m venv .venv
    .venv/bin/pip install -r requirements.txt
    ```
-   `opencv-python-headless` and `numpy` are only for the lead-image face filter. `yt-dlp` is only for TikTok collections.
+   `opencv-python-headless` and `numpy` are only for the lead-image face filter.
 
 2. **Configure.** `cp config.example.json config.json`, then edit it. The keys that matter first:
    - `data_dir`: where the pipeline keeps `queue.txt`, `articles/`, `interests.json` and the EPUB.
@@ -157,11 +155,10 @@ Everything below describes `"delivery": "kobo"`.
    - `calibre_library`: the folder that holds Calibre's `metadata.db`.
    - `calibre_web_app_db`: Calibre-Web's `app.db`.
    - `kobo_user_id`: the Calibre-Web user id that owns the Kobo.
-   - Source keys (`audiobookshelf_container`, `media_dirs`, `tiktok_collections`, `topics`, `kickstarter_enabled`). Leave a source empty to skip it.
+   - Source keys (`audiobookshelf_container`, `media_dirs`, `topics`). Leave a source empty to skip it.
 
    Scripts find the file through `KOBO_PAPER_CONFIG`, then `./config.json`, then the repo root. `config.json` is in `.gitignore`.
 
-   For the Kickstarter source, set `KOBO_IMAP_USER` and `KOBO_IMAP_PASSWORD` in the environment. The password never goes in the config file.
 
 3. **Fonts (optional).** The cover uses UnifrakturMaguntia and PT Serif TTF files. They are not in this repo. Put them in `<data_dir>/fonts/` (names are set by `masthead_font`, `serif_bold_font`, `serif_regular_font`). Without them the build still works and uses Pillow's built-in font.
 
@@ -210,7 +207,7 @@ The smoke test builds an EPUB from two fixture articles.
 
 ## Open-source parts
 
-trafilatura, ebooklib, Calibre and Calibre-Web, yt-dlp, Kobo Sync.
+trafilatura, ebooklib, Calibre and Calibre-Web, Kobo Sync.
 
 ## License
 

@@ -5,7 +5,7 @@ Settings come from a JSON file. Lookup order:
   2. ./config.json (the current directory)
   3. config.json in the repo root (next to scripts/)
 Every key has a default, so the scripts run with no config file at all.
-Secrets (the optional IMAP login) are read from environment variables, never from the file.
+Secrets (API keys, tokens) are read from environment variables, never from the file.
 """
 import json
 import os
@@ -40,21 +40,16 @@ DEFAULTS = {
     "media_dirs": {},
     "media_recent_days": 60,              # what counts as "recently added"
     "media_max_per_dir": 8,               # newest N per folder at most
-    "ytdlp": "yt-dlp",                    # path or name of the yt-dlp binary
-    "tiktok_collections": [],             # public TikTok collection URLs
     "exclude_titles": [],                 # media titles to ignore (substring match), e.g. kids' shows
     "topics": [],                         # subjects you want covered, e.g. "ADHD research"
     # Share of the paper per interest input (renormalised; see kobo-interests.py), e.g.
-    # {"books_reading": 0.35, "topics": 0.45, "own_media": 0.12}
+    # {"books_reading": 0.38, "topics": 0.49, "own_media": 0.13}
     "interest_weights": {},
     "avoid_topics": [],                   # subjects to keep out (or cap), e.g. "crypto prices"
     "extra_rules": [],                    # extra plain-English rules appended to interests.json
     "lead_image_avoid_faces": True,       # skip photos with a prominent face for lead images
     "article_images": True,               # embed article / podcast / book-cover images in the edition
     "library_owner": "1000:1000",         # uid:gid that owns your Calibre library
-    "kickstarter_enabled": False,         # needs KOBO_IMAP_USER / KOBO_IMAP_PASSWORD
-    "imap_host": "imap.gmail.com",
-    "imap_folder": "[Gmail]/All Mail",
 
     # --- KOReader delivery ------------------------------------------------------------
     # "koreader": dated editions served to the KOReader plugin (server/paper_server.py).

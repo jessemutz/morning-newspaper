@@ -58,8 +58,6 @@
   "companion_enabled": true,
   "companion_safety_pct": 0.5,
   "audiobookshelf_container": "",
-  "tiktok_collections": [],
-  "kickstarter_enabled": false,
   "lead_image_avoid_faces": true,
   "media_dirs": {
     "/media/Movies": "movie",
@@ -69,8 +67,8 @@
   "media_recent_days": 60,
   "exclude_titles": [],
   "interest_weights": {
-    "books_reading": 0.35,
-    "topics": 0.45,
-    "own_media": 0.12
+    "books_reading": 0.38,
+    "topics": 0.49,
+    "own_media": 0.13
   }
 }

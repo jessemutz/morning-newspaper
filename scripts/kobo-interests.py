@@ -5,19 +5,15 @@ Read-only on every source. Writes one file, atomically, into data_dir (see confi
 The curation step (an LLM, see README) reads it and picks about 10 articles into queue.txt.
 
 Inputs and base weights (override with config "interest_weights"):
-  books_reading  35%  what you are reading (KOReader plugin or Kobo sync, + Audiobookshelf)
+  books_reading  38%  what you are reading (KOReader plugin or Kobo sync, + Audiobookshelf)
                       and the authors of those books
-  topics         45%  config "topics": the subjects you want covered
-  own_media      12%  recent additions to your media folders (config "media_dirs")
-  tiktok          5%  public collections listed with yt-dlp (config list)
-  kickstarter     3%  backed projects (IMAP, readonly), at most one item
-  conversation, instagram, notes: 0%
+  topics         49%  config "topics": the subjects you want covered
+  own_media      13%  recent additions to your media folders (config "media_dirs")
 
 Every source is optional. An input that is not configured, fails, or has no entries gives
 its weight to the others in proportion, and interests.json says why. curate.py then sets
 aside followed_sources_weight of the paper for the feeds you follow and scales these down.
 """
-import imaplib
 import json
 import os
 import re
@@ -25,23 +21,16 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
-import time
 from datetime import datetime, timedelta, timezone
-from email import message_from_bytes
-from email.header import decode_header, make_header
 from pathlib import Path
-from urllib.request import Request, urlopen
 
 from kobo_config import CFG, DATA_DIR
 
 OUT = DATA_DIR / "interests.json"
 CALIBRE_APP_DB = CFG["calibre_web_app_db"]
 CALIBRE_META_DB = str(Path(CFG["calibre_library"]) / "metadata.db")
-YTDLP = CFG["ytdlp"]
 
-BASE_WEIGHTS = {"books_reading": 0.35, "topics": 0.45, "own_media": 0.12,
-                "tiktok": 0.05, "kickstarter": 0.03}
-ZERO_WEIGHT = ["conversation_topics", "instagram_saves", "notes_app"]
+BASE_WEIGHTS = {"books_reading": 0.38, "topics": 0.49, "own_media": 0.13}
 READING_DAYS = 30
 
 MEDIA_EXT = {".mkv", ".mp4", ".m4v", ".avi", ".m4b", ".mp3", ".m4a", ".flac", ".epub"}
@@ -49,7 +38,6 @@ MEDIA_EXT = {".mkv", ".mp4", ".m4v", ".avi", ".m4b", ".mp3", ".m4a", ".flac", ".
 RULES = [
     "Curate from the entries below. Weights say how many of the ~10 articles each input earns.",
     "No generic movies/TV or entertainment-news items. Cover only the named titles, franchises, creators and universes.",
-    "Kickstarter: at most one item.",
     "topics: find substantial pieces (essays, research news, interviews, practical guides by people "
     "who know the subject), not homepages, category or tag pages, product listings or SEO filler.",
     "own_media: titles recently added to the reader's media library; news, essays or interviews about "
@@ -306,71 +294,6 @@ def book_creators(books):
     return dedupe(out)
 
 
-# --- tiktok -----------------------------------------------------------------------------
-
-def tiktok_collection(url):
-    p = subprocess.run([YTDLP, "--flat-playlist", "-J", "--no-warnings", url],
-                       capture_output=True, text=True, timeout=120)
-    if not p.stdout.strip():
-        raise RuntimeError("yt-dlp: " + (p.stderr.strip().splitlines() or ["no output"])[-1][:160])
-    data = json.loads(p.stdout)
-    items = [e for e in data.get("entries", []) if e]
-    if not items:
-        why = (p.stderr.strip().splitlines() or ["empty listing"])[0][:160]
-        raise RuntimeError("collection listing empty: " + why)
-    name = data.get("title") or url
-    return [{"kind": "recipe" if "recipe" in name.lower() else "title",
-             "name": e.get("title") or e.get("id"), "date": today(),
-             "why": f"public TikTok collection {name}"} for e in items[:40]]
-
-
-def tiktok(cfg, lister=tiktok_collection):
-    entries, errors = [], []
-    if not cfg["tiktok_collections"]:
-        return [], {"status": "failed", "reason": "no tiktok_collections configured"}
-    for url in cfg["tiktok_collections"]:
-        try:
-            entries += lister(url)
-        except Exception as e:
-            errors.append(f"{url}: {e}")
-    if errors and not entries:
-        return [], {"status": "failed", "reason": " | ".join(errors)}
-    st = {"status": "ok"}
-    if errors:
-        st["partial_errors"] = errors
-    return entries, st
-
-
-# --- kickstarter -----------------------------------------------------------------------
-
-def kickstarter_projects():
-    if not CFG["kickstarter_enabled"]:
-        raise RuntimeError("kickstarter_enabled is false (source skipped)")
-    env = {"user": os.environ.get("KOBO_IMAP_USER"), "password": os.environ.get("KOBO_IMAP_PASSWORD")}
-    if not (env["user"] and env["password"]):
-        raise RuntimeError("set KOBO_IMAP_USER and KOBO_IMAP_PASSWORD")
-    M = imaplib.IMAP4_SSL(CFG["imap_host"])
-    try:
-        M.login(env["user"], env["password"])
-        M.select('"%s"' % CFG["imap_folder"], readonly=True)
-        t, d = M.search(None, "FROM", "kickstarter.com", "SUBJECT", '"You just backed"')
-        out = []
-        for i in d[0].split():
-            t, m = M.fetch(i, "(BODY.PEEK[HEADER.FIELDS (SUBJECT DATE)])")
-            msg = message_from_bytes(m[0][1])
-            subj = str(make_header(decode_header(msg["Subject"]))).replace("\r\n", " ")
-            name = re.sub(r"^You just backed\s+", "", subj)
-            date = datetime.strptime(msg["Date"][:25].strip(), "%a, %d %b %Y %H:%M:%S").date().isoformat()
-            out.append({"kind": "project", "name": re.split(r"\s[:|\-]\s|:\s|,\s", name)[0].strip(),
-                        "date": date, "why": f"Kickstarter project you backed ({date}); updates only"})
-        return sorted(out, key=lambda e: e["date"], reverse=True)
-    finally:
-        try:
-            M.logout()
-        except Exception:
-            pass
-
-
 # --- assembly ---------------------------------------------------------------------------
 
 def base_weights(cfg):
@@ -403,25 +326,19 @@ def build(cfg, src):
     kobo = run("reading", src["kobo"], [])
     abook = run("audiobookshelf", src["abs"], [])
     books = merge_books(kobo, abook)
-    tk_entries, status["tiktok"] = src["tiktok"]()
 
     input_status = {
         "books_reading": status["reading"] if status["reading"]["status"] == "failed"
         and status["audiobookshelf"]["status"] == "failed" else {"status": "ok"},
         "topics": {"status": "ok"},
         "own_media": None,
-        "tiktok": status["tiktok"],
-        "kickstarter": None,
     }
     inputs = {
         "books_reading": {"entries": books + book_creators(books)},
         "topics": {"entries": topics(cfg)},
         "own_media": {"entries": run("own_media", src["own_media"], [])},
-        "tiktok": {"entries": tk_entries},
-        "kickstarter": {"max_items": 1, "entries": run("kickstarter", src["kickstarter"], [])},
     }
     input_status["own_media"] = status["own_media"]
-    input_status["kickstarter"] = status["kickstarter"]
 
     base = base_weights(cfg)
     empty = [k for k, v in inputs.items() if not v["entries"]]
@@ -431,7 +348,6 @@ def build(cfg, src):
         st = input_status[k]
         reason = st.get("reason") if st["status"] == "failed" else "no entries"
         notes[k] = f"{k}: {reason}; its {base[k]:.0%} went to the other inputs in proportion."
-    weights.update({k: 0.0 for k in ZERO_WEIGHT})
 
     for k, v in inputs.items():
         v["weight"] = weights[k]
@@ -442,7 +358,6 @@ def build(cfg, src):
         "weights": weights,
         "weight_notes": notes,
         "inputs": inputs,
-        "excluded_inputs": {k: "weight 0" for k in ZERO_WEIGHT},
         "always_included": [f"{DATA_DIR}/queue.txt (kobo: urls)", f"{DATA_DIR}/pinned.txt"],
         "rules": RULES + ([f"Avoid these subjects: {', '.join(cfg['avoid_topics'])}."]
                           if cfg.get("avoid_topics") else []) + list(cfg.get("extra_rules", [])),
@@ -456,8 +371,6 @@ def main():
         else (lambda: kobo_reading(cfg)),
         "abs": abs_reading,
         "own_media": lambda: own_media(cfg),
-        "tiktok": lambda: tiktok(cfg),
-        "kickstarter": kickstarter_projects,
     }
     doc = build(cfg, src)
     write_atomic(OUT, doc)
