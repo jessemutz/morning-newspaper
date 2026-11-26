@@ -12,7 +12,11 @@
     <string>exec "$HOME/bin/start-llama-server.sh" --host 0.0.0.0</string>
   </array>
   <key>EnvironmentVariables</key>
-  <dict><key>LLAMA_API_KEY</key><string>CHANGE-ME</string></dict>
+  <dict>
+    <key>LLAMA_API_KEY</key><string>CHANGE-ME</string>
+    <!-- launchd's PATH lacks Homebrew; llama-server lives in /opt/homebrew/bin -->
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>StandardOutPath</key><string>/tmp/llama-server.log</string>

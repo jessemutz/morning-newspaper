@@ -785,15 +785,18 @@ def build_epub(articles: list[dict]) -> None:
         # pads every chapter past ~5000 characters. The Kobo shows a footnote-style
         # POPUP (instead of navigating) for in-book links whose target is under 5000
         # chars; a full-length footer guarantees the front-page tap opens the article.
+        # KOReader has no such popup and readers use the TOC, so skip it there.
         import html as _hh
-        others = "".join(
-            f"<p style='margin:.4em 0'><a href='art_{j}.xhtml'>{_hh.escape(o['title'])}</a>"
-            f"<br/><span style='color:#666'>{_hh.escape(o['domain'])} &middot; "
-            f"{reading_minutes(_text_words(o['html']))} min</span><br/>"
-            f"{_hh.escape(_fp_summary(o['html'], 2, 240))}</p>"
-            for j, o in enumerate(articles) if j != i)
-        footer = (f"<hr/><h2>More in this edition</h2>{others}"
-                  f"<p style='color:#666'>{_hh.escape(PAPER_TITLE)} &middot; refreshed daily.</p>")
+        footer = ""
+        if CFG["delivery"] == "kobo":
+            others = "".join(
+                f"<p style='margin:.4em 0'><a href='art_{j}.xhtml'>{_hh.escape(o['title'])}</a>"
+                f"<br/><span style='color:#666'>{_hh.escape(o['domain'])} &middot; "
+                f"{reading_minutes(_text_words(o['html']))} min</span><br/>"
+                f"{_hh.escape(_fp_summary(o['html'], 2, 240))}</p>"
+                for j, o in enumerate(articles) if j != i)
+            footer = (f"<hr/><h2>More in this edition</h2>{others}"
+                      f"<p style='color:#666'>{_hh.escape(PAPER_TITLE)} &middot; refreshed daily.</p>")
         content = f"{head}{body_html}{footer}"
         # HARD FLOOR: the Kobo pops up a footnote preview (instead of navigating) when a
         # link target is under ~5000 chars. The footer usually clears it, but very short

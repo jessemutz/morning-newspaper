@@ -1,4 +1,5 @@
 FROM python:3.12-slim
+LABEL org.opencontainers.image.source=https://github.com/jessemutz/morning-newspaper
 ARG SUPERCRONIC=v0.2.33
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates libgl1 libglib2.0-0 \
  && arch=$(dpkg --print-architecture) \
@@ -12,3 +13,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY scripts/ scripts/
 COPY deploy/truenas/crontab /app/crontab
 ENV KOBO_PAPER_CONFIG=/config/config.json PYTHONUNBUFFERED=1
+COPY deploy/truenas/start.sh /app/start.sh
+EXPOSE 8765
+CMD ["/app/start.sh"]
