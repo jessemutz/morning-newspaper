@@ -95,7 +95,7 @@ function MorningPaper:request(method, path, body, sink)
         headers["Content-Length"] = tostring(#body)
     end
     socketutil:set_timeout(socketutil.FILE_BLOCK_TIMEOUT, socketutil.FILE_TOTAL_TIMEOUT)
-    local ok, code = pcall(function()
+    local ok, code, rheaders = pcall(function()
         return socket.skip(1, http.request{
             url = self:server() .. path,
             method = method,
@@ -109,7 +109,7 @@ function MorningPaper:request(method, path, body, sink)
         logger.warn("MorningPaper: request failed", path, code)
         return nil
     end
-    return code, table.concat(resp)
+    return code, table.concat(resp), type(rheaders) == "table" and rheaders or {}
 end
 
 -- ---------------------------------------------------------------------------------------
@@ -215,26 +215,41 @@ end
 -- ---------------------------------------------------------------------------------------
 -- downloads
 
-function MorningPaper:download(item)
+function MorningPaper:download(item, dest)
     local ltn12 = require("ltn12")
     local dir = self:docRoot() .. "/" .. item.folder
     util.makePath(dir)
-    local dest = dir .. "/" .. item.filename
+    dest = dest or (dir .. "/" .. item.filename)
     local tmp = dest .. ".part"
-    local fh = io.open(tmp, "wb")
-    if not fh then return false end
     -- Escape spaces etc. ourselves too, in case an older server sends a raw path.
     local url = item.url:gsub("[^%w%-%._~/%%]", function(c) return string.format("%%%02X", c:byte()) end)
-    local code = self:request("GET", url, nil, ltn12.sink.file(fh))
-    local size = lfs.attributes(tmp, "size")
-    if code == 200 and size == item.size then
-        os.rename(tmp, dest)
-        return dest
+    local why
+    for attempt = 1, 3 do -- Kindle Wi-Fi drops transfers now and then (often right after wake)
+        local fh = io.open(tmp, "wb")
+        if not fh then return false, T(_("%1: cannot write %2"), item.filename, tmp) end
+        local started = os.time()
+        local code, _body, headers = self:request("GET", url, nil, ltn12.sink.file(fh))
+        pcall(function() fh:close() end) -- the sink only closes (and flushes) on a clean end
+        local size = lfs.attributes(tmp, "size")
+        if code == 200 and size == item.size then
+            os.remove(dest) -- some filesystems will not rename over an existing file
+            local ok, rerr = os.rename(tmp, dest)
+            if ok and lfs.attributes(dest, "size") == item.size then
+                logger.info("MorningPaper: saved", dest)
+                return dest
+            end
+            os.remove(tmp)
+            return false, T(_("%1: downloaded but could not save as %2 (%3)"), item.filename, dest,
+                tostring(rerr))
+        end
+        os.remove(tmp)
+        local secs = os.time() - started
+        why = T(_("%1: HTTP %2, %3 of %4 bytes (server sent length %5) after %6 s, %7 tries"),
+            item.filename, tostring(code or "no connection"), tostring(size or 0), tostring(item.size),
+            tostring(headers and headers["content-length"] or "?"), tostring(secs), tostring(attempt))
+        logger.warn("MorningPaper: download failed", url, why)
     end
-    os.remove(tmp)
-    logger.warn("MorningPaper: download failed", url, code, size)
-    return false, T(_("%1: HTTP %2, %3 of %4 bytes"), item.filename, tostring(code or "no connection"),
-        tostring(size or 0), tostring(item.size))
+    return false, why
 end
 
 function MorningPaper:syncFiles()
@@ -252,15 +267,26 @@ function MorningPaper:syncFiles()
         wanted[item.id] = item
         local dest = self:docRoot() .. "/" .. item.folder .. "/" .. item.filename
         local prev = have[item.id]
+        -- A book keeps the file it was first saved as, even if its title changes in the
+        -- library: same path = same KOReader progress, highlights and sidecar.
+        if item.kind == "book" and prev and prev.verified and prev.path then dest = prev.path end
         local present = lfs.attributes(dest, "mode") == "file"
-        -- Books you deleted on the device stay deleted; editions are always kept current.
-        local skip = prev and prev.sha256 == item.sha256 and (present or item.kind == "book")
+        -- Editions are always kept current. A book is updated when the library copy changes
+        -- (metadata edited in CWA/Calibre), but one you deleted on the device stays deleted.
+        local skip
+        if item.kind == "book" then
+            -- A missing file counts as "deleted on purpose" only if we saw it saved. Records
+            -- from older plugin versions were sometimes written for files that never landed.
+            skip = prev and ((prev.sha256 == item.sha256 and present) or (not present and prev.verified))
+        else
+            skip = prev and prev.sha256 == item.sha256 and present
+        end
         if not skip then
-            local path, why = self:download(item)
+            local path, why = self:download(item, dest)
             if not path then
                 table.insert(failures, why or item.filename)
             elseif path then
-                have[item.id] = { sha256 = item.sha256, path = path, kind = item.kind }
+                have[item.id] = { sha256 = item.sha256, path = path, kind = item.kind, verified = true }
                 if item.kind == "edition" then
                     new_editions = new_editions + 1
                     if not newest or path > newest then newest = path end
@@ -458,6 +484,19 @@ function MorningPaper:checkConnection()
     notify(T(_("Connected. Server has %1 edition(s) and %2 shelf book(s)."), eds, books), 6)
 end
 
+function MorningPaper:redownloadBooks()
+    local have = self.settings:readSetting("downloaded") or {}
+    for id, rec in pairs(have) do
+        if rec.kind == "book" then
+            logger.info("MorningPaper: forgetting", id, rec.path)
+            have[id] = nil
+        end
+    end
+    self.settings:saveSetting("downloaded", have)
+    self.settings:flush()
+    NetworkMgr:runWhenOnline(function() self:sync(true) end)
+end
+
 function MorningPaper:addToMainMenu(menu_items)
     menu_items.morningpaper = {
         text = _("Morning Paper"),
@@ -488,6 +527,11 @@ function MorningPaper:addToMainMenu(menu_items)
                 callback = function()
                     NetworkMgr:runWhenOnline(function() self:sync(true) end)
                 end,
+            },
+            {
+                text = _("Re-download library books"),
+                help_text = _("Forget which shelf books were already downloaded (or deleted on purpose), then sync."),
+                callback = function() self:redownloadBooks() end,
             },
             {
                 text = _("Sync automatically on wake (uncheck to pause)"),
@@ -543,7 +587,8 @@ end
 for _k, name in ipairs({ "onCloseDocument", "onSuspend", "onResume", "onNetworkConnected" }) do
     guard(name, false)
 end
-for _k, name in ipairs({ "sync", "showStatus", "checkConnection", "openLatest", "editSetting" }) do
+for _k, name in ipairs({ "sync", "showStatus", "checkConnection", "openLatest", "editSetting",
+                           "redownloadBooks" }) do
     guard(name, true)
 end
 

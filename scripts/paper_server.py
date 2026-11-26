@@ -22,6 +22,7 @@ from urllib.parse import quote, unquote
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from kobo_config import CFG, DATA_DIR  # noqa: E402
 import koreader_state as ks  # noqa: E402
+import epub_meta  # noqa: E402
 
 EDITIONS = DATA_DIR / "editions"
 TOKEN = os.environ.get("PAPER_TOKEN", "")
@@ -63,9 +64,10 @@ def manifest() -> dict:
         shelf = []
     for b in shelf:
         fname = safe_filename(f"{b['title']} - {b['authors']}") + ".epub"
+        path = epub_meta.prepared(b)  # library metadata + cover written in
         items.append({"id": f"book:{b['id']}", "kind": "book", "folder": "Books",
-                      "filename": fname, "size": b["path"].stat().st_size,
-                      "sha256": sha256(b["path"]), "url": f"/files/book/{b['id']}"})
+                      "filename": fname, "size": path.stat().st_size,
+                      "sha256": sha256(path), "url": f"/files/book/{b['id']}"})
     return {"edition_prefix": CFG["edition_title"], "keep_editions": int(CFG["editions_keep"]),
             "items": items}
 
@@ -116,7 +118,7 @@ class Handler(BaseHTTPRequestHandler):
                 bid = int(path.rsplit("/", 1)[1])
             except ValueError:
                 return self._send(404, {"error": "not found"})
-            match = next((b["path"] for b in ks.shelf_books() if b["id"] == bid), None)
+            match = next((epub_meta.prepared(b) for b in ks.shelf_books() if b["id"] == bid), None)
             return self._send_file(match)
         self._send(404, {"error": "not found"})
 

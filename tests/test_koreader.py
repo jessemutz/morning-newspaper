@@ -16,7 +16,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "scripts"
-OURS = ["kobo_config", "koreader_state", "llm", "gather_candidates", "curate", "book_companion", "paper_server"]
+OURS = ["kobo_config", "koreader_state", "llm", "gather_candidates", "curate", "book_companion", "paper_server", "epub_meta"]
 
 
 @pytest.fixture
@@ -171,3 +171,66 @@ def test_companion_render_sections(env):
               "Test your recall", "About the author", "The story so far", "Recall answers"):
         assert h in out, h
     assert out.index("Test your recall") < out.index("Recall answers")
+
+
+def _epub(path, opf, extra=()):
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr(zipfile.ZipInfo("mimetype"), "application/epub+zip", zipfile.ZIP_STORED)
+        z.writestr("META-INF/container.xml",
+                   '<container><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>')
+        z.writestr("OEBPS/content.opf", opf)
+        for name, data in extra:
+            z.writestr(name, data)
+
+
+def test_shelf_copy_gets_library_metadata_and_cover(env, tmp_path):
+    import xml.etree.ElementTree as ET
+    em = env("epub_meta")
+    opf = ('<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="2.0">'
+           '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">'
+           '<dc:title>Old: Series Book 2</dc:title><dc:creator opf:role="aut">Someone</dc:creator>'
+           '<meta name="cover" content="c"/></metadata>'
+           '<manifest><item id="c" href="old.png" media-type="image/png"/></manifest></package>')
+    src, cover = tmp_path / "b.epub", tmp_path / "cover.jpg"
+    _epub(src, opf, [("OEBPS/old.png", b"PNG")])
+    cover.write_bytes(b"\xff\xd8JPEG")
+    book = {"id": 7, "title": "New & Better", "authors": "A. Writer, B. Writer", "path": src,
+            "series": "The Saga", "series_index": 2.0, "cover": cover}
+    p = em.prepared(book)
+    assert p != src and p.parent == em.CACHE
+    z = zipfile.ZipFile(p)
+    assert z.namelist()[0] == "mimetype" and z.getinfo("mimetype").compress_type == zipfile.ZIP_STORED
+    new = z.read("OEBPS/content.opf").decode()
+    ET.fromstring(new)  # still well-formed
+    assert "<dc:title>New &amp; Better</dc:title>" in new and "Old:" not in new
+    assert new.count("<dc:creator") == 2 and "Someone" not in new
+    assert 'name="calibre:series" content="The Saga"' in new
+    assert 'name="calibre:series_index" content="2"' in new
+    assert 'name="cover" content="mp-cover"' in new and 'content="c"' not in new
+    assert z.read("OEBPS/mp-cover.jpg") == cover.read_bytes()  # PNG cover: added as a new item
+    assert em.prepared(book) == p  # cached
+    book["series_index"] = 3.0
+    p2 = em.prepared(book)
+    assert p2 != p and not p.exists()  # metadata change -> rebuilt, old copy pruned
+    assert em.cached_copies() == {p2: 7}
+
+
+def test_shelf_copy_replaces_jpeg_cover_in_place(env, tmp_path):
+    em = env("epub_meta")
+    opf = ('<package xmlns="http://www.idpf.org/2007/opf" version="3.0">'
+           '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>T</dc:title></metadata>'
+           '<manifest><item id="x" href="img/c.jpg" media-type="image/jpeg" properties="cover-image"/>'
+           '</manifest></package>')
+    src, cover = tmp_path / "b.epub", tmp_path / "cover.jpg"
+    _epub(src, opf, [("OEBPS/img/c.jpg", b"old")])
+    cover.write_bytes(b"new")
+    p = em.prepared({"id": 1, "title": "T", "authors": "A", "path": src, "cover": cover})
+    z = zipfile.ZipFile(p)
+    assert z.read("OEBPS/img/c.jpg") == b"new" and "OEBPS/mp-cover.jpg" not in z.namelist()
+
+
+def test_shelf_copy_falls_back_to_original_on_bad_epub(env, tmp_path):
+    em = env("epub_meta")
+    bad = tmp_path / "bad.epub"
+    bad.write_bytes(b"not a zip")
+    assert em.prepared({"id": 2, "title": "T", "authors": "A", "path": bad}) == bad

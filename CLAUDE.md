@@ -52,9 +52,14 @@ Special article JSON (same shape as fetched ones, in `articles/`): url `morning-
 - `scripts/paper_server.py` (stdlib, needs `PAPER_TOKEN`): `POST /api/progress`, `GET /api/manifest`,
   `GET /files/edition/<urlquoted name>`, `GET /files/book/<id>` (CWA shelf `kindle_shelf`), `/health`.
   Manifest URLs MUST be URL-quoted (KOReader sends raw spaces → broken request; that bug happened).
+  Shelf books are sent as rewritten copies (`epub_meta.py`, cached in `<data_dir>/bookcache/`):
+  title/authors/series/cover from metadata.db + cover.jpg, because CWA/Calibre edits don't reach
+  the EPUB file. `find_book_file` also md5-matches these copies.
 - `koreader/morningpaper.koplugin/main.lua`: snapshot progress on close/suspend → outbox; on
   wake/Wi-Fi (≥2h apart) flush + download manifest items to `<home>/<edition_title>/` and `Books/`,
-  prune old editions. Menu: Status, Check connection, Open latest edition, Sync now, auto-sync
+  prune old editions. Books: a changed library copy replaces the file in place (same path,
+  keeps progress); a book deleted on the device stays deleted only if its record is `verified`;
+  downloads retry 3×. Menu: Status, Check connection, Open latest edition, Sync now, Re-download library books, auto-sync
   toggle, Wi-Fi-on-wake, Server URL, Token. All entry points wrapped by `guard()` (a Lua error in a
   menu callback kills KOReader). JSON via rapidjson→json fallback; `extend`→`new` fallback.
   Syntax check: `luajit -bl main.lua`. No KOReader emulator here: test on the device; errors land

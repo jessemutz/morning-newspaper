@@ -178,6 +178,20 @@ def find_book_file(md5: str, title: str = "", authors: str = "", library=None) -
         if ent["md5"] == md5:
             hit = b["path"]
             break
+    if not hit:
+        # Shelf books reach the Kindle as rewritten copies (epub_meta): match those too.
+        import epub_meta
+        by_id = {b["id"]: b["path"] for b in books}
+        for p, bid in epub_meta.cached_copies().items():
+            key = str(p)
+            ent = cache.get(key)
+            if not ent:  # cached copies never change in place (the key is in the name)
+                ent = {"mtime": 0, "md5": partial_md5(p)}
+                cache[key] = ent
+                changed = True
+            if ent["md5"] == md5 and bid in by_id:
+                hit = by_id[bid]
+                break
     if changed:
         _write_atomic(_MD5_CACHE, cache)
     if hit:
@@ -211,4 +225,20 @@ def shelf_books(shelf_name: "str | None" = None) -> list[dict]:
         # prefer the plain EPUB: KOReader renders it natively, and its md5 is the one we match
         if b["id"] not in by_id or b["format"] == "EPUB":
             by_id[b["id"]] = b
-    return [by_id[i] for i in ids if i in by_id]
+    out = [dict(by_id[i]) for i in ids if i in by_id]
+    if out:
+        # Library metadata, written into the copy sent to the device (epub_meta)
+        lib = Path(CFG["calibre_library"])
+        m = _ro(lib / "metadata.db")
+        for b in out:
+            row = m.execute(
+                """SELECT b.series_index, b.has_cover, b.path,
+                          (SELECT s.name FROM series s JOIN books_series_link l ON l.series = s.id
+                           WHERE l.book = b.id)
+                   FROM books b WHERE b.id = ?""", (b["id"],)).fetchone()
+            if row:
+                idx, has_cover, rel, series = row
+                b["series"], b["series_index"] = series or "", idx if series else None
+                b["cover"] = lib / rel / "cover.jpg" if has_cover else None
+        m.close()
+    return out
