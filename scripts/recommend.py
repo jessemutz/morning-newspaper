@@ -2,7 +2,7 @@
 """The recommendations page at the back of the paper: books, podcasts, movies & TV, blogs.
 
 The LLM suggests titles from what you are reading, the podcasts and sources you follow, and
-your genres and topics. Models invent plausible titles, so every suggestion is checked against
+your topics. Models invent plausible titles, so every suggestion is checked against
 a real catalogue before it is printed, and dropped if it cannot be found:
   books     Hardcover (with HARDCOVER_API_KEY), else Open Library, else Wikipedia
   podcasts  Apple's podcast directory

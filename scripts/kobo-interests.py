@@ -4,16 +4,18 @@
 Read-only on every source. Writes one file, atomically, into data_dir (see config.json).
 The curation step (an LLM, see README) reads it and picks about 10 articles into queue.txt.
 
-Inputs and base weights:
-  books_reading  35%  Kobo sync progress > 0 in the last 30 days + Audiobookshelf progress
-  own_titles     30%  media requests you made (JSONL log and/or Seerr)
-  genre_core     20%  your standing genres, plus SPECIFIC screen entries only
-  tiktok         10%  public collections listed with yt-dlp (config list)
-  kickstarter     5%  backed projects (IMAP, readonly), at most one item
+Inputs and base weights (override with config "interest_weights"):
+  books_reading  35%  what you are reading (KOReader plugin or Kobo sync, + Audiobookshelf)
+                      and the authors of those books
+  topics         45%  config "topics": the subjects you want covered
+  own_media      12%  recent additions to your media folders (config "media_dirs")
+  tiktok          5%  public collections listed with yt-dlp (config list)
+  kickstarter     3%  backed projects (IMAP, readonly), at most one item
   conversation, instagram, notes: 0%
 
-Every source is optional. A source that is not configured or that fails gives its weight
-to books_reading and own_titles (35:30) and says why in interests.json.
+Every source is optional. An input that is not configured, fails, or has no entries gives
+its weight to the others in proportion, and interests.json says why. curate.py then sets
+aside followed_sources_weight of the paper for the feeds you follow and scales these down.
 """
 import imaplib
 import json
@@ -33,30 +35,25 @@ from urllib.request import Request, urlopen
 from kobo_config import CFG, DATA_DIR
 
 OUT = DATA_DIR / "interests.json"
-MEDIA_WATCH = Path(CFG["media_watch_file"]).expanduser() if CFG["media_watch_file"] else None
 CALIBRE_APP_DB = CFG["calibre_web_app_db"]
 CALIBRE_META_DB = str(Path(CFG["calibre_library"]) / "metadata.db")
-SEERR_SETTINGS = CFG["seerr_settings"]
 YTDLP = CFG["ytdlp"]
 
-BASE_WEIGHTS = {"books_reading": 0.35, "own_titles": 0.30, "genre_core": 0.20,
-                "tiktok": 0.10, "kickstarter": 0.05}
+BASE_WEIGHTS = {"books_reading": 0.35, "topics": 0.45, "own_media": 0.12,
+                "tiktok": 0.05, "kickstarter": 0.03}
 ZERO_WEIGHT = ["conversation_topics", "instagram_saves", "notes_app"]
 READING_DAYS = 30
 
-# A screen entry must name a specific title, franchise or creator. These never qualify.
-GENERIC_NAMES = {
-    "movie", "movies", "film", "films", "tv", "television", "tv shows", "tv series",
-    "entertainment", "entertainment news", "movies and tv", "movies & tv", "movies/tv",
-    "cinema", "streaming", "shows", "series", "hollywood", "filmmaking",
-}
-ALLOWED_KINDS = {"book", "author", "title", "franchise", "creator", "universe", "topic",
-                 "genre", "project", "recipe"}
+MEDIA_EXT = {".mkv", ".mp4", ".m4v", ".avi", ".m4b", ".mp3", ".m4a", ".flac", ".epub"}
 
 RULES = [
     "Curate from the entries below. Weights say how many of the ~10 articles each input earns.",
     "No generic movies/TV or entertainment-news items. Cover only the named titles, franchises, creators and universes.",
-    "Kickstarter: at most one item. Genres are reading genres only.",
+    "Kickstarter: at most one item.",
+    "topics: find substantial pieces (essays, research news, interviews, practical guides by people "
+    "who know the subject), not homepages, category or tag pages, product listings or SEO filler.",
+    "own_media: titles recently added to the reader's media library; news, essays or interviews about "
+    "that exact title or its makers only.",
     "Items at most max_age_days old, one primer per topic, queue.txt and pinned.txt always included.",
     "Books marked spoiler_sensitive are being read right now: never pick anything that could reveal "
     "plot, twists or endings past progress_pct. Author interviews, craft essays and adaptation news "
@@ -182,77 +179,104 @@ def merge_books(*lists):
     return sorted(seen.values(), key=lambda e: e["date"], reverse=True)
 
 
-# --- own_titles ---------------------------------------------------------------------
+# --- own_media ----------------------------------------------------------------------
+# Recent additions to your media folders. Owning something is a weak signal (a household
+# library holds the kids' shows too), so only what arrived in the last media_recent_days counts,
+# a few per folder, minus exclude_titles. Folder mtimes are useless (bulk renames and
+# permission fixes touch them all), so an item is dated by the newest file inside it.
 
 def excluded_title(title, cfg):
     low = title.lower()
-    if "tunarr" in low:
-        return True
     return any(x.lower() in low for x in cfg["exclude_titles"])
 
 
-def media_watch_titles(cfg):
-    out = []
-    if MEDIA_WATCH is None or not MEDIA_WATCH.exists():
-        raise RuntimeError("media_watch_file not set or missing (source skipped)")
-    for line in MEDIA_WATCH.read_text().splitlines():
-        if not line.strip():
-            continue
-        d = json.loads(line)
-        if d.get("requested_by") != cfg["media_requester"] or d.get("service") not in ("sonarr", "radarr"):
-            continue
-        if excluded_title(d["title"], cfg):
-            continue
-        out.append({"kind": "title", "name": clean_title(d["title"]),
-                    "date": datetime.fromtimestamp(d["added_at"], timezone.utc).date().isoformat(),
-                    "why": f"your {d['service']} request via media log"})
-    return out
+RELEASE_JUNK = re.compile(r"\b(?:2160p|1080p|720p|uhd|blu-?ray|remux|web-?dl|hdr\d*|dv|hevc|x26[45]|"
+                          r"complete|repack|multi|unabridged|abridged)\b.*$", re.I)
 
 
-def seerr_get(cfg, path):
-    if not cfg["seerr_url"] or not SEERR_SETTINGS:
-        raise RuntimeError("seerr_url / seerr_settings not set (source skipped)")
-    key = json.load(open(SEERR_SETTINGS))["main"]["apiKey"]
-    req = Request(cfg["seerr_url"] + path, headers={"X-Api-Key": key})
-    with urlopen(req, timeout=20) as r:
-        return json.load(r)
+def media_title(name, kind):
+    """("Tombstone 1993 UHD BluRay 2160p ... REMUX-FraMeSToR", "movie") -> ("Tombstone", "1993", "").
+    Audiobooks: "Author - Title.m4b" and "Title By Author (Unabridged).m4b" give the author."""
+    stem = Path(name).stem if Path(name).suffix.lower() in MEDIA_EXT else name
+    s = stem.replace("_ ", ": ").replace("_", " ")
+    if s.count(".") >= 3 and " " not in s:
+        s = s.replace(".", " ")
+    s = re.sub(r"\s*[\[(][^\])]*(?:abridged|tunarr|season|s\d)[^\])]*[\])]", "", s, flags=re.I)
+    year, creator = "", ""
+    m = re.match(r"^(.*?)[\s(\[]+((?:19|20)\d\d)(?:[\s)\]]|$)", s)
+    if m and m.group(1).strip():
+        s, year = m.group(1), m.group(2)
+    s = RELEASE_JUNK.sub("", s)
+    if " AKA " in s:
+        s = s.split(" AKA ")[-1]
+    if kind == "audiobook":
+        m = re.match(r"^(.+?)\s+[Bb]y\s+(.+)$", s)
+        if m:
+            s, creator = m.group(1), m.group(2)
+        elif " - " in s:
+            creator, s = s.split(" - ", 1)
+    s = re.sub(r"\s+", " ", s).strip(" -.:")
+    if kind == "audiobook" and ":" in s:
+        s = s.split(":")[0].strip()
+    return s, year, creator.strip()
 
 
-def seerr_titles(cfg, fetch=None):
-    """Your Seerr requests only. Returns (titles, screen_leads) where leads feed genre_core."""
-    fetch = fetch or (lambda p: seerr_get(cfg, p))
-    titles, leads = [], []
-    for r in fetch("/api/v1/request?take=200")["results"]:
-        who = r.get("requestedBy", {})
-        name = who.get("username") or who.get("displayName") or ""
-        if name != cfg["seerr_user"] or name in cfg["exclude_requesters"]:
+def newest_file(path, now_ts, depth=3):
+    """mtime of the newest media file at most `depth` levels down (future dates ignored)."""
+    path = Path(path)
+    if path.is_file():
+        t = path.stat().st_mtime
+        return t if t <= now_ts else 0
+    best = 0
+    base = len(path.parts)
+    for root, dirs, files in os.walk(path):
+        if len(Path(root).parts) - base >= depth:
+            dirs[:] = []
+        for f in files:
+            if f.startswith(".") or Path(f).suffix.lower() not in MEDIA_EXT:
+                continue
+            try:
+                t = os.stat(os.path.join(root, f)).st_mtime
+            except OSError:
+                continue
+            if t <= now_ts:
+                best = max(best, t)
+    return best
+
+
+def own_media(cfg, now=None):
+    dirs = cfg.get("media_dirs") or {}
+    if not dirs:
+        raise RuntimeError("media_dirs not set (source skipped)")
+    now = now or datetime.now(timezone.utc)
+    cutoff = now.timestamp() - int(cfg["media_recent_days"]) * 86400
+    out, missing = [], []
+    for folder, kind in dirs.items():
+        root = Path(folder)
+        if not root.is_dir():
+            missing.append(folder)
             continue
-        kind, tmdb = r["media"]["mediaType"], r["media"]["tmdbId"]
-        try:
-            info = fetch(f"/api/v1/{'tv' if kind == 'tv' else 'movie'}/{tmdb}")
-        except Exception:
-            continue
-        title = info.get("title") or info.get("name")
-        if not title or excluded_title(title, cfg):
-            continue
-        date = r["createdAt"][:10]
-        titles.append({"kind": "title", "name": title, "date": date,
-                       "why": "your Seerr request"})
-        coll = (info.get("collection") or info.get("belongsToCollection") or {}).get("name")
-        if coll:
-            leads.append({"kind": "franchise", "name": coll.replace(" Collection", ""), "date": date,
-                          "why": f"franchise of your Seerr request '{title}'"})
-        if kind == "tv":
-            for c in info.get("createdBy", [])[:2]:
-                leads.append({"kind": "creator", "name": c["name"], "date": date,
-                              "why": f"creator of your Seerr request '{title}'"})
-        else:
-            for c in info.get("credits", {}).get("crew", []):
-                if c.get("job") == "Director":
-                    leads.append({"kind": "creator", "name": c["name"], "date": date,
-                                  "why": f"director of your Seerr request '{title}'"})
-                    break
-    return titles, leads
+        items = []
+        for e in root.iterdir():
+            if e.name.startswith("."):
+                continue
+            t = newest_file(e, now.timestamp())
+            if t >= cutoff:
+                items.append((t, e.name))
+        for t, name in sorted(items, reverse=True)[: int(cfg["media_max_per_dir"])]:
+            title, year, creator = media_title(name, kind)
+            if not title or excluded_title(title, cfg):
+                continue
+            date = datetime.fromtimestamp(t, timezone.utc).date().isoformat()
+            label = {"movie": "movie", "tv": "TV show", "audiobook": "audiobook"}.get(kind, kind)
+            e = {"kind": "title", "name": f"{title} ({year})" if year else title, "date": date,
+                 "why": f"{label} added to your library {date}"}
+            if creator:
+                e["creator"] = creator
+            out.append(e)
+    if missing and not out:
+        raise RuntimeError("media_dirs not found: " + ", ".join(missing))
+    return dedupe(sorted(out, key=lambda e: e["date"], reverse=True))
 
 
 def dedupe(entries):
@@ -265,26 +289,21 @@ def dedupe(entries):
     return out
 
 
-# --- genre_core -----------------------------------------------------------------------
+# --- topics ---------------------------------------------------------------------------
 
-def generic(name):
-    return name.strip().lower() in GENERIC_NAMES
+def topics(cfg):
+    return [{"kind": "topic", "name": t, "date": today(), "why": "standing topic from config"}
+            for t in cfg.get("topics", []) if t.strip()]
 
 
-def genre_core(cfg, books, own, leads):
-    """Genres stay genres. The movies/TV part is only concrete: franchises, creators, titles
-    seeded from your own titles and your reading. Never a movies/tv category."""
-    entries = [{"kind": "genre", "name": g, "date": today(), "why": "fixed core, reading genre"}
-               for g in cfg["genres"]]
-    entries += [{"kind": "topic", "name": t, "date": today(), "why": "standing topic from config"}
-                for t in cfg.get("topics", [])]
-    entries += leads
+def book_creators(books):
+    """Authors of the books you are reading: interviews, essays, adaptation news."""
+    out = []
     for b in books:
         for a in filter(None, [x.strip() for x in b.get("creator", "").split(",")]):
-            entries.append({"kind": "creator", "name": a, "date": b["date"],
-                            "why": f"author of '{b['name']}' you are reading: adaptations and same-universe news"})
-    entries = [e for e in dedupe(entries) if e["kind"] in ALLOWED_KINDS and not generic(e["name"])]
-    return entries
+            out.append({"kind": "creator", "name": a, "date": b["date"],
+                        "why": f"author of '{b['name']}' you are reading: interviews, essays, adaptations"})
+    return dedupe(out)
 
 
 # --- tiktok -----------------------------------------------------------------------------
@@ -354,19 +373,23 @@ def kickstarter_projects():
 
 # --- assembly ---------------------------------------------------------------------------
 
-def redistribute(weights, failed):
+def base_weights(cfg):
+    w = dict(BASE_WEIGHTS)
+    w.update({k: float(v) for k, v in (cfg.get("interest_weights") or {}).items() if k in w})
+    return w
+
+
+def redistribute(weights, empty):
+    """Give the weight of every empty input to the rest, in proportion; sums stay at 1."""
     w = dict(weights)
-    freed = sum(w[k] for k in failed)
-    for k in failed:
+    for k in empty:
         w[k] = 0.0
-    base = w["books_reading"] + w["own_titles"]
-    for k in ("books_reading", "own_titles"):
-        w[k] += freed * w[k] / base
-    return {k: round(v, 4) for k, v in w.items()}
+    total = sum(w.values())
+    return {k: round(v / total, 4) if total else 0.0 for k, v in w.items()}
 
 
 def build(cfg, src):
-    status, notes = {}, {}
+    status = {}
 
     def run(name, fn, default):
         try:
@@ -377,52 +400,41 @@ def build(cfg, src):
             status[name] = {"status": "failed", "reason": str(e)[:300]}
             return default
 
-    kobo = run("kobo_sync", src["kobo"], [])
+    kobo = run("reading", src["kobo"], [])
     abook = run("audiobookshelf", src["abs"], [])
     books = merge_books(kobo, abook)
-    mw = run("media_watch", src["media_watch"], [])
-    seerr_res = run("seerr", src["seerr"], ([], []))
-    own = dedupe(mw + seerr_res[0])
-    own.sort(key=lambda e: e["date"], reverse=True)
-    genres = genre_core(cfg, books, own, seerr_res[1])
     tk_entries, status["tiktok"] = src["tiktok"]()
-    ks = run("kickstarter", src["kickstarter"], [])
 
     input_status = {
-        "books_reading": status["kobo_sync"] if status["kobo_sync"]["status"] == "failed" or
-        status["audiobookshelf"]["status"] == "ok" else status["audiobookshelf"],
-        "own_titles": status["media_watch"] if status["media_watch"]["status"] == "failed" else status["seerr"],
-        "genre_core": {"status": "ok"},
+        "books_reading": status["reading"] if status["reading"]["status"] == "failed"
+        and status["audiobookshelf"]["status"] == "failed" else {"status": "ok"},
+        "topics": {"status": "ok"},
+        "own_media": None,
         "tiktok": status["tiktok"],
-        "kickstarter": status["kickstarter"],
+        "kickstarter": None,
     }
-    # a books/own source pair reports failed only when every part failed
-    if status["kobo_sync"]["status"] == "failed" and status["audiobookshelf"]["status"] == "failed":
-        input_status["books_reading"] = status["kobo_sync"]
-    elif "failed" in (status["kobo_sync"]["status"], status["audiobookshelf"]["status"]):
-        input_status["books_reading"] = {"status": "partial", "parts": {
-            "kobo_sync": status["kobo_sync"], "audiobookshelf": status["audiobookshelf"]}}
-    if status["media_watch"]["status"] == "failed" and status["seerr"]["status"] == "failed":
-        input_status["own_titles"] = status["media_watch"]
-    elif "failed" in (status["media_watch"]["status"], status["seerr"]["status"]):
-        input_status["own_titles"] = {"status": "partial", "parts": {
-            "media_watch": status["media_watch"], "seerr": status["seerr"]}}
+    inputs = {
+        "books_reading": {"entries": books + book_creators(books)},
+        "topics": {"entries": topics(cfg)},
+        "own_media": {"entries": run("own_media", src["own_media"], [])},
+        "tiktok": {"entries": tk_entries},
+        "kickstarter": {"max_items": 1, "entries": run("kickstarter", src["kickstarter"], [])},
+    }
+    input_status["own_media"] = status["own_media"]
+    input_status["kickstarter"] = status["kickstarter"]
 
-    failed = [k for k in ("tiktok", "kickstarter") if input_status[k]["status"] == "failed"]
-    weights = redistribute(BASE_WEIGHTS, failed)
-    for k in failed:
-        notes[k] = (f"{k} failed ({input_status[k]['reason']}); its {BASE_WEIGHTS[k]:.0%} moved to "
-                    "books_reading and own_titles in proportion 35:30.")
+    base = base_weights(cfg)
+    empty = [k for k, v in inputs.items() if not v["entries"]]
+    weights = redistribute(base, empty)
+    notes = {}
+    for k in empty:
+        st = input_status[k]
+        reason = st.get("reason") if st["status"] == "failed" else "no entries"
+        notes[k] = f"{k}: {reason}; its {base[k]:.0%} went to the other inputs in proportion."
     weights.update({k: 0.0 for k in ZERO_WEIGHT})
 
-    inputs = {
-        "books_reading": {"weight": weights["books_reading"], "entries": books},
-        "own_titles": {"weight": weights["own_titles"], "entries": own},
-        "genre_core": {"weight": weights["genre_core"], "entries": genres},
-        "tiktok": {"weight": weights["tiktok"], "entries": tk_entries},
-        "kickstarter": {"weight": weights["kickstarter"], "max_items": 1, "entries": ks},
-    }
     for k, v in inputs.items():
+        v["weight"] = weights[k]
         v["status"] = input_status[k]
         v["count"] = len(v["entries"])
     return {
@@ -443,8 +455,7 @@ def main():
         "kobo": (lambda: koreader_reading(cfg)) if cfg.get("delivery") == "koreader"
         else (lambda: kobo_reading(cfg)),
         "abs": abs_reading,
-        "media_watch": lambda: media_watch_titles(cfg),
-        "seerr": lambda: seerr_titles(cfg),
+        "own_media": lambda: own_media(cfg),
         "tiktok": lambda: tiktok(cfg),
         "kickstarter": kickstarter_projects,
     }

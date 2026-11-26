@@ -104,7 +104,7 @@ def guard(cands: list[dict], books: list[dict], use_llm: bool) -> "tuple[list, l
 def with_followed(interests: dict, cands: list[dict]) -> dict:
     """Add the sources you follow (feeds, blogs, podcasts) as an interest input of their own.
 
-    Following a site is itself a signal: without this, a profile built from books and genres
+    Following a site is itself a signal: without this, a profile built from books and topics
     scores everything from a general feed (Hacker News, The Verge) as irrelevant."""
     sources = sorted({c.get("source", "") for c in cands if c.get("kind") in ("feed", "blog", "podcast")} - {""})
     w = float(CFG["followed_sources_weight"])
@@ -142,7 +142,9 @@ def llm_scores(cands: list[dict], interests: dict, batch: int = 40) -> None:
             "You are the editor of a one-reader morning newspaper. Score each candidate 0-10 for how "
             "much this reader would want to read it today (10 = must read). Penalize clickbait, "
             "listicles, press releases, paywalled teasers, thin aggregator pages and near-duplicates "
-            "of another candidate. For each: `why` in at most 12 words, then `interest` (the input it "
+            "of another candidate. Homepages, section/category/tag pages, encyclopedia entries, "
+            "product or ranking pages and anything off-topic that only shares a word with an "
+            "interest (fantasy football is not fantasy fiction) score 0. For each: `why` in at most 12 words, then `interest` (the input it "
             "serves best, or none), then `score`.\n"
             "followed_sources: the reader chose to follow these sources, so their best pieces "
             "(substantial, original, well made) score well under followed_sources even when they "

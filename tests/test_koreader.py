@@ -86,8 +86,8 @@ def test_spoiler_guard_without_llm_drops_mentions(env):
 
 def test_select_honours_quota_and_site_cap(env):
     cu = env("curate")
-    interests = {"inputs": {"books_reading": {"weight": 0.5}, "genre_core": {"weight": 0.5}}}
-    cands = [{"url": f"https://same.com/{i}", "score": 9, "interest": "genre_core"} for i in range(5)]
+    interests = {"inputs": {"books_reading": {"weight": 0.5}, "topics": {"weight": 0.5}}}
+    cands = [{"url": f"https://same.com/{i}", "score": 9, "interest": "topics"} for i in range(5)]
     cands += [{"url": f"https://s{i}.com/x", "score": 6, "interest": "books_reading"} for i in range(3)]
     picked = cu.select(cands, interests, 4)
     sites = [c["url"].split("/")[2] for c in picked]

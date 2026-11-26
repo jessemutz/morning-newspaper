@@ -9,12 +9,15 @@ Kindle running KOReader with a custom plugin, a small HTTP server, a local LLM. 
 1. `fetch_fonts.py`: downloads UnifrakturMaguntia (blackletter masthead) + PT Serif into `<data_dir>/fonts` if missing.
 2. `kobo-interests.py`: builds `interests.json` (REGENERATED every run; users edit `config.json`, never this).
    `koreader_reading()` reads `reading/state.json`; current books get `spoiler_sensitive: true`.
-   `genre_core` also carries config `topics`; `avoid_topics` and `extra_rules` become rules.
+   Inputs: `books_reading` (+ their authors; the paper's own editions are skipped), `topics`
+   (config; no `genres` any more), `own_media` (`media_dirs` recent additions, dated by newest
+   file inside: folder mtimes were bulk-touched), tiktok, kickstarter. Empty inputs give their
+   weight away in proportion; `interest_weights` overrides. `avoid_topics`/`extra_rules` become rules.
 3. `gather_candidates.py` → `candidates.jsonl`: `feeds`, `blog_pages` (feed discovery, else link scrape),
    `podcasts` (RSS URL or show name → Apple lookup cached in `podcast_feeds.json`; episodes are
    **prebuilt** from show notes into `prebuilt/` because feed links point at the show homepage),
-   web search (LLM writes queries → Kagi `KAGI_API_KEY` → SearXNG fallback; skipped if neither).
-   Dedupes against `seen.jsonl`.
+   web search (LLM writes queries → Kagi `KAGI_API_KEY` → SearXNG fallback; skipped if neither;
+   `is_listing()` drops homepages/tag/section pages). Dedupes against `seen.jsonl`.
 4. `curate.py` → appends URLs to `queue.txt` (~1.5× `articles_per_edition`, rank order; build caps).
    Spoiler guard first (LLM check vs progress; no LLM = drop every mention). Adds a synthetic
    `followed_sources` interest (`followed_sources_weight`) or general feeds all score 0.

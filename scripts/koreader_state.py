@@ -91,7 +91,10 @@ def currently_reading(days: int = 30, now: "datetime | None" = None) -> list[dic
     now = now or datetime.now(timezone.utc)
     cutoff = now.timestamp() - days * 86400
     out = []
+    paper = CFG["edition_title"].lower()
     for md5, b in load_state().items():
+        if (b.get("title") or "").lower().startswith(paper):
+            continue  # the paper's own editions are not books you are reading
         if b.get("updated", 0) >= cutoff and (b.get("percent") or 0) < 0.995:
             out.append({"md5": md5, **b})
     return sorted(out, key=lambda b: b["updated"], reverse=True)

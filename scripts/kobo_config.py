@@ -35,17 +35,18 @@ DEFAULTS = {
     # Interest model sources.
     "audiobookshelf_container": "",       # docker container name; empty = skip Audiobookshelf
     "audiobookshelf_db": "/config/absdatabase.sqlite",
-    "media_watch_file": "",               # optional JSONL of media requests; empty = skip
-    "media_requester": "me",              # value of requested_by that counts as yours
-    "seerr_url": "",                      # e.g. http://localhost:5055 ; empty = skip Seerr
-    "seerr_settings": "",                 # path to Seerr settings.json (holds the API key)
-    "seerr_user": "",
+    # Media folders -> kind (movie | tv | audiobook); recent additions become the own_media input.
+    # e.g. {"/media/Movies": "movie", "/media/TV Shows": "tv", "/media/Audiobooks/Fiction": "audiobook"}
+    "media_dirs": {},
+    "media_recent_days": 60,              # what counts as "recently added"
+    "media_max_per_dir": 8,               # newest N per folder at most
     "ytdlp": "yt-dlp",                    # path or name of the yt-dlp binary
     "tiktok_collections": [],             # public TikTok collection URLs
-    "exclude_titles": [],
-    "exclude_requesters": [],
-    "genres": ["fiction", "fantasy"],
-    "topics": [],                         # non-book subjects you want covered, e.g. "woodworking"
+    "exclude_titles": [],                 # media titles to ignore (substring match), e.g. kids' shows
+    "topics": [],                         # subjects you want covered, e.g. "ADHD research"
+    # Share of the paper per interest input (renormalised; see kobo-interests.py), e.g.
+    # {"books_reading": 0.35, "topics": 0.45, "own_media": 0.12}
+    "interest_weights": {},
     "avoid_topics": [],                   # subjects to keep out (or cap), e.g. "crypto prices"
     "extra_rules": [],                    # extra plain-English rules appended to interests.json
     "lead_image_avoid_faces": True,       # skip photos with a prominent face for lead images

@@ -117,12 +117,12 @@ Everything below describes `"delivery": "kobo"`.
 ## How it works
 
 1. **Interest model** (`scripts/kobo-interests.py`, 5:15 AM) reads up to five sources, read-only, and writes one file: `interests.json`.
-   - Reading activity 35%: Kobo progress for the last 30 days (from Calibre-Web), plus Audiobookshelf progress.
-   - Media requests 30%: titles you asked your server to fetch (a JSONL log and/or Seerr/Overseerr requests).
-   - Genres 20%: your standing genres from `config.json`.
-   - TikTok & Instagram 10%: public TikTok collections, read with yt-dlp. The code reads TikTok collections only; Instagram has no reader in this repo.
-   - Miscellaneous 5%: backed projects, at most one item. The code reads Kickstarter "You just backed" emails over IMAP.
-   - If a source is not configured or fails, its weight moves to Reading activity and Media requests (35:30), and `interests.json` says why.
+   - Reading 35%: what you are reading (the KOReader plugin's progress, or Kobo progress from Calibre-Web, plus Audiobookshelf) and those books' authors.
+   - Topics 45%: the `topics` list in `config.json`. Web search writes its queries mostly from these.
+   - Your media 12%: recent additions to the folders in `media_dirs` (newest file inside each item, last `media_recent_days`, minus `exclude_titles`).
+   - TikTok 5%: public TikTok collections, read with yt-dlp.
+   - Kickstarter 3%: backed projects, at most one item, from "You just backed" emails over IMAP.
+   - An input that is not configured, fails, or has nothing in it gives its weight to the others in proportion, and `interests.json` says why. Override the split with `interest_weights`. Curation then reserves `followed_sources_weight` (default 0.3) of the paper for the feeds you follow.
 2. **Curation** (5:30 AM): an LLM reads `interests.json` and picks about 10 articles into `queue.txt`. This step is **yours to plug in**. See `curate.example.sh` for the contract. No curation agent ships in this repo.
 3. **Fetch + extract** (`scripts/kobo-digest-build.py`, 6:00 AM): trafilatura turns each URL into clean article text.
 4. **Build edition**: ebooklib writes one EPUB, newest first, one chapter per article, with a generated cover and a tappable front page.
@@ -157,7 +157,7 @@ Everything below describes `"delivery": "kobo"`.
    - `calibre_library`: the folder that holds Calibre's `metadata.db`.
    - `calibre_web_app_db`: Calibre-Web's `app.db`.
    - `kobo_user_id`: the Calibre-Web user id that owns the Kobo.
-   - Source keys (`audiobookshelf_container`, `media_watch_file`, `seerr_*`, `tiktok_collections`, `genres`, `kickstarter_enabled`). Leave a source empty to skip it.
+   - Source keys (`audiobookshelf_container`, `media_dirs`, `tiktok_collections`, `topics`, `kickstarter_enabled`). Leave a source empty to skip it.
 
    Scripts find the file through `KOBO_PAPER_CONFIG`, then `./config.json`, then the repo root. `config.json` is in `.gitignore`.
 

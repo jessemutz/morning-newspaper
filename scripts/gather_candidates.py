@@ -187,6 +187,22 @@ def searxng(query: str, n: int) -> list[dict]:
             for d in r.json().get("results", [])[:n] if d.get("url")]
 
 
+LISTING_SEGMENTS = {"tag", "tags", "category", "categories", "topic", "topics", "section", "sections",
+                    "author", "authors", "search", "page", "archive", "archives", "collections", "shop",
+                    "products", "store", "genre", "genres", "label", "labels", "hub", "browse"}
+
+
+def is_listing(url: str) -> bool:
+    """Homepages, tag/category/section pages and other indexes: not articles.
+    An article URL nearly always has a slug with hyphens or an id with digits."""
+    segs = [s for s in urlparse(url).path.lower().split("/") if s]
+    if not segs or segs[-1] in ("index.html", "index.php", "home"):
+        return True
+    if segs[0] in LISTING_SEGMENTS and len(segs) <= 2:  # /tag/science-fiction, /section/books
+        return True
+    return len(segs) <= 2 and not any("-" in s or "_" in s or any(ch.isdigit() for ch in s) for s in segs)
+
+
 QUERY_SCHEMA = {"type": "object", "properties": {"queries": {"type": "array", "items": {"type": "string"}}},
                 "required": ["queries"], "additionalProperties": False}
 
@@ -210,9 +226,14 @@ def write_queries(interests: dict) -> list[str]:
         prompt = (
             f"Today is {datetime.now():%A %B %-d, %Y}. Write {n} web search queries that would find "
             "fresh (this week), high-quality articles for a personal morning newspaper, matching the "
-            "reader's interests below in proportion to their weights. Prefer specific names over "
-            "generic topics. For spoiler-sensitive books, only search for the author, adaptations or "
-            "craft/context, never the plot or ending.\n\n" + interest_summary(interests))
+            "reader's interests below in proportion to their weights. Every topic gets at least one "
+            "query when there are enough. Write each query the way a good article on it would be "
+            "titled or described, with a concrete angle (a new study, an interview, an essay, a "
+            "practical method, a named person or book), not a bare subject: 'new study ADHD adults "
+            "sleep' rather than 'ADHD'. Vary the angles across days; skip shopping, rankings and "
+            "listicle phrasing. Prefer specific names over generic topics. For spoiler-sensitive "
+            "books, only search for the author, adaptations or craft/context, never the plot or "
+            "ending.\n\n" + interest_summary(interests))
         try:
             out = llm.chat_json([{"role": "user", "content": prompt}], QUERY_SCHEMA, task="rank")
             qs = [q.strip() for q in out.get("queries", []) if q.strip()]
@@ -241,6 +262,8 @@ def from_search(interests: dict) -> list[dict]:
             except Exception as e:
                 log(f"{engine.__name__} failed for {q!r}: {e}")
         for d in res or []:
+            if is_listing(d["url"]):
+                continue
             out.append({**d, "source": urlparse(d["url"]).netloc.removeprefix("www."),
                         "kind": "search", "query": q})
     return out

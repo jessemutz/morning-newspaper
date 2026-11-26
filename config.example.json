@@ -19,33 +19,58 @@
     "rank": "qwen3.6-35b-a3b-ud-q4_k_xl",
     "write": "qwen3.6-35b-a3b-ud-q4_k_xl"
   },
-  "genres": [
-    "fantasy",
-    "science fiction"
+  "topics": [
+    "ADHD research and new findings",
+    "Stoic philosophy in practice",
+    "Literary essays and criticism"
   ],
-  "topics": [],
   "avoid_topics": [],
   "extra_rules": [],
   "sports": [
-    {"league": "NHL", "follow": ["Avalanche"]},
-    {"league": "F1", "follow": ["Max Verstappen", "Kimi Antonelli", "Ferrari"]}
+    {
+      "league": "NHL",
+      "follow": [
+        "Avalanche"
+      ]
+    },
+    {
+      "league": "F1",
+      "follow": [
+        "Max Verstappen",
+        "Kimi Antonelli",
+        "Ferrari"
+      ]
+    }
   ],
-  "recommendations": {"enabled": true, "per_type": 3},
+  "recommendations": {
+    "enabled": true,
+    "per_type": 3
+  },
   "feeds": [
     "https://hnrss.org/best"
   ],
   "blog_pages": [],
   "podcasts": [],
-  "followed_sources_weight": 0.3,
+  "followed_sources_weight": 0.25,
   "kagi_enabled": true,
   "searxng_url": "http://truenas.local:8080",
-  "search_queries_max": 8,
+  "search_queries_max": 12,
   "companion_enabled": true,
   "companion_safety_pct": 0.5,
   "audiobookshelf_container": "",
-  "media_watch_file": "",
-  "seerr_url": "",
   "tiktok_collections": [],
   "kickstarter_enabled": false,
-  "lead_image_avoid_faces": true
+  "lead_image_avoid_faces": true,
+  "media_dirs": {
+    "/media/Movies": "movie",
+    "/media/TV Shows": "tv",
+    "/media/Audiobooks": "audiobook"
+  },
+  "media_recent_days": 60,
+  "exclude_titles": [],
+  "interest_weights": {
+    "books_reading": 0.35,
+    "topics": 0.45,
+    "own_media": 0.12
+  }
 }
