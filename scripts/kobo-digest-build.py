@@ -24,6 +24,7 @@ All settings live in config.json (see config.example.json).
 """
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -169,6 +170,31 @@ def _declared_date(downloaded: str) -> "str | None":
     return None
 
 
+# Pages that come back HTTP 200 but are not the article: bot walls, script-only shells, errors.
+ERROR_PAGE = re.compile(
+    r"javascript (?:is )?(?:disabled|required)|enable javascript|(?:turn|switch) on javascript"
+    r"|please enable cookies|access denied|you have been blocked|attention required"
+    r"|just a moment\.\.\.|checking your browser|verify (?:that )?you are (?:a )?human|are you a robot"
+    r"|captcha|page not found|404 (?:error|not found)|403 forbidden|unsupported browser"
+    r"|something went wrong|an error (?:has )?occurred|subscribe (?:now )?to (?:continue|read)"
+    r"|this (?:content|page) is (?:not|no longer) available",
+    re.I)
+MIN_ARTICLE_WORDS = 120
+
+
+def broken_reason(title: str, html: str, min_words: int = MIN_ARTICLE_WORDS) -> "str | None":
+    """Why a fetched page is not a readable article, or None if it looks fine.
+    min_words=0 for stored items (podcast episodes from show notes can be short)."""
+    words = _text_words(html)
+    head = f"{title} " + re.sub(r"<[^>]+>", " ", html or "")[:600]
+    m = ERROR_PAGE.search(head)
+    if m and words < 600:  # a long real article may quote such a phrase
+        return f"error page ('{m.group(0)}')"
+    if words < min_words:
+        return f"too short ({words} words)"
+    return None
+
+
 def extract_article(url: str) -> dict:
     """Fetch + extract one article, raising ArticleFailure on failure."""
     downloaded = None
@@ -194,6 +220,9 @@ def extract_article(url: str) -> dict:
         raise ArticleFailure("no content extracted")
     meta = trafilatura.extract_metadata(downloaded)
     title = (getattr(meta, "title", None) or url) if meta else url
+    bad = broken_reason(title, html)
+    if bad:
+        raise ArticleFailure(bad)
     guessed = (getattr(meta, "date", None) if meta else None)
     declared = _declared_date(downloaded)
     date = declared or guessed or datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -903,7 +932,15 @@ def todays_articles(articles: list[dict], urls: list[str], today: str, cap: int)
     """A dated edition: today's companion pages, then queued articles in queue (rank) order,
     at most `cap` of them. Curation queues spares, so stale or failed picks are backfilled."""
     sections = [a for a in articles if (a.get("pin_top") or a.get("pin_bottom")) and a.get("published") == today]
-    by_url = {a.get("url"): a for a in articles if not (a.get("pin_top") or a.get("pin_bottom"))}
+    by_url = {}
+    for a in articles:
+        if a.get("pin_top") or a.get("pin_bottom"):
+            continue
+        bad = broken_reason(a.get("title", ""), a.get("html", ""), 0) if a.get("url") in urls else None
+        if bad:  # stored before this check existed: skip it, a spare takes its place
+            log(f"skipped {bad}: {a.get('url')}")
+            continue
+        by_url[a.get("url")] = a
     queued = [by_url[u] for u in dict.fromkeys(urls) if u in by_url][:cap]
     return sorted(sections + queued, key=_section_key)
 

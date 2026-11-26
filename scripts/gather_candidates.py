@@ -187,6 +187,7 @@ def searxng(query: str, n: int) -> list[dict]:
             for d in r.json().get("results", [])[:n] if d.get("url")]
 
 
+INDEX_ENDINGS = {"news", "latest", "articles", "stories", "features", "reviews", "videos", "podcasts"}
 LISTING_SEGMENTS = {"tag", "tags", "category", "categories", "topic", "topics", "section", "sections",
                     "author", "authors", "search", "page", "archive", "archives", "collections", "shop",
                     "products", "store", "genre", "genres", "label", "labels", "hub", "browse"}
@@ -199,6 +200,11 @@ def is_listing(url: str) -> bool:
     if not segs or segs[-1] in ("index.html", "index.php", "home"):
         return True
     if segs[0] in LISTING_SEGMENTS and len(segs) <= 2:  # /tag/science-fiction, /section/books
+        return True
+    if segs[-1] in INDEX_ENDINGS:  # imdb.com/title/tt0458290/news/
+        return True
+    slugless = not any("-" in x or any(ch.isdigit() for ch in x) for x in segs)
+    if segs[0] in ("news", "latest") and slugless:  # sciencedaily.com/news/health_medicine/mental_health/
         return True
     return len(segs) <= 2 and not any("-" in s or "_" in s or any(ch.isdigit() for ch in s) for s in segs)
 

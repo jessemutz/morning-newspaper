@@ -106,6 +106,10 @@ def test_paper_is_not_a_book_you_are_reading(mods):
     ("https://aeon.co/essays/what-the-stoics-got-right", False),
     ("https://www.nytimes.com/2026/11/20/books/review/new-fiction.html", False),
     ("https://psyche.co/guides/how-to-plan-your-day-with-adhd", False),
+    ("https://www.imdb.com/title/tt0458290/news/", True),
+    ("https://www.sciencedaily.com/news/health_medicine/mental_health/", True),
+    ("https://www.sciencedaily.com/releases/2026/11/261125.htm", False),
+    ("https://www.bbc.com/news/articles/c4g7x2l8", False),
 ])
 def test_is_listing(mods, url, listing):
     import gather_candidates

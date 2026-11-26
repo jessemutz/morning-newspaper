@@ -261,3 +261,20 @@ def test_reading_page_every_edition_without_llm(env, monkeypatch):
     h = art["html"]
     assert "46% read" in h and "page 452 of 990" in h and "not reachable" in h
     assert "Sciona passes her trial." in h and "Who sent the letter?" in h and "Thomil scouts." in h
+
+
+def test_error_pages_are_not_articles(tmp_path, monkeypatch):
+    import importlib.util
+    (tmp_path / "config.json").write_text(json.dumps({"data_dir": str(tmp_path / "data")}))
+    monkeypatch.setenv("KOBO_PAPER_CONFIG", str(tmp_path / "config.json"))
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    spec = importlib.util.spec_from_file_location("kdb", SCRIPTS / "kobo-digest-build.py")
+    b = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(b)
+    real = "<p>" + "A real paragraph about Stoic practice and daily habits. " * 30 + "</p>"
+    assert b.broken_reason("On Stoic habits", real) is None
+    assert "error page" in b.broken_reason("IMDb", "<p>JavaScript is disabled. Enable it to continue.</p>")
+    assert "error page" in b.broken_reason("Just a moment...", "<p>Checking your browser</p>")
+    assert "too short" in b.broken_reason("Home", "<p>Welcome to our site. Sign in.</p>")
+    # a long real article that merely mentions such a phrase is kept
+    assert b.broken_reason("Why sites say access denied", "<p>access denied</p>" + real * 3) is None

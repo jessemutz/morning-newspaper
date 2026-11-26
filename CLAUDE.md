@@ -17,7 +17,7 @@ Kindle running KOReader with a custom plugin, a small HTTP server, a local LLM. 
    `podcasts` (RSS URL or show name → Apple lookup cached in `podcast_feeds.json`; episodes are
    **prebuilt** from show notes into `prebuilt/` because feed links point at the show homepage),
    web search (LLM writes queries → Kagi `KAGI_API_KEY` → SearXNG fallback; skipped if neither;
-   `is_listing()` drops homepages/tag/section pages). Dedupes against `seen.jsonl`.
+   `is_listing()` drops homepages/tag/section pages and /news-style indexes). Dedupes against `seen.jsonl`.
 4. `curate.py` → appends URLs to `queue.txt` (~1.5× `articles_per_edition`, rank order; build caps).
    Spoiler guard first (LLM check vs progress; no LLM = drop every mention). Adds a synthetic
    `followed_sources` interest (`followed_sources_weight`) or general feeds all score 0.
@@ -42,7 +42,9 @@ Kindle running KOReader with a custom plugin, a small HTTP server, a local LLM. 
    and verified: books Hardcover (`HARDCOVER_API_KEY`, GraphQL `search`, untested) → Open Library →
    Wikipedia; podcasts Apple; film/TV Wikipedia (Apple returns nothing for these); blogs live fetch.
    History in `recommendations.json`, never repeated.
-8. `kobo-digest-build.py`: fetch/extract (trafilatura, images on), build
+8. `kobo-digest-build.py`: fetch/extract (trafilatura, images on; `broken_reason()` rejects
+   HTTP-200 error pages (JS/bot walls, 404 text) and fetched pages under 120 words, so a queued
+   spare takes the slot; stored items get the error-page check only: podcast notes are short), build
    `editions/<edition_title> YYYY-MM-DD.epub`, record `seen.jsonl`, clear queue, prune editions.
    Edition order via `_section_key`: `pin_top` (companion `pin_order` 0, behind-the-book 1) → news
    in queue order → `pin_bottom` (sports 0, recommendations 1). Images: `embed_images()` → grayscale
