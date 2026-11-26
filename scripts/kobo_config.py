@@ -65,6 +65,7 @@ DEFAULTS = {
     "cwa_url": "http://truenas.local:30437",
     "cwa_app_db": "",                     # CWA's app.db (shelves); empty = no shelf sync
     "kindle_shelf": "Kindle",             # books on this CWA shelf sync to the Kindle
+    "db_cache_dir": "",                   # local copies of the CWA dbs; empty = <data_dir>/dbcache (must not be SMB)
 
     # --- LLM (llama-server on the Mac, OpenAI-compatible) ---------------------------------
     "llm_base_url": "http://127.0.0.1:1234/v1",   # API key comes from LLAMA_API_KEY

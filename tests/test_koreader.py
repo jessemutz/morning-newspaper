@@ -234,3 +234,30 @@ def test_shelf_copy_falls_back_to_original_on_bad_epub(env, tmp_path):
     bad = tmp_path / "bad.epub"
     bad.write_bytes(b"not a zip")
     assert em.prepared({"id": 2, "title": "T", "authors": "A", "path": bad}) == bad
+
+
+def test_reading_page_every_edition_without_llm(env, monkeypatch):
+    ks = env("koreader_state")
+    bc = env("book_companion")
+    monkeypatch.setattr(bc.llm, "available", lambda: False)
+    monkeypatch.setattr(bc, "author_bio", lambda a: None)  # no network
+    now = datetime.now(timezone.utc)
+    t = int(now.timestamp())
+    ks.record_snapshot({"books": [
+        {"md5": "bob", "title": "Blood Over Bright Haven", "authors": "M. L. Wang", "percent": 0.46,
+         "page": 452, "pages": 990, "chapter": "Chapter 12", "updated": t - 3600},
+        {"md5": "dcc", "title": "Dungeon Crawler Carl", "authors": "Matt Dinniman", "percent": 0.001,
+         "updated": t - 60}]})
+    bc.COMPANION.mkdir(parents=True, exist_ok=True)
+    (bc.COMPANION / "bob.json").write_text(json.dumps({
+        "covered_pct": 0.28, "story_so_far": "Sciona studies magic.\nThomil scouts.", "last_day": "2026-11-25",
+        "sessions": [{"label": "First catch-up", "from": 0, "to": 0.28, "summary": "Sciona passes her trial."}],
+        "last_companion": {"people": [{"name": "Sciona", "note": "a mage"}], "threads": ["Who sent the letter?"]}}))
+    assert bc.main() == 0
+    arts = sorted(bc.ARTICLES.glob("companion-*.json"))
+    assert len(arts) == 1  # the 0.1% book does not crowd out the one being read
+    art = json.loads(arts[0].read_text())
+    assert art["pin_top"] and art["title"] == "Your reading: Blood Over Bright Haven"
+    h = art["html"]
+    assert "46% read" in h and "page 452 of 990" in h and "not reachable" in h
+    assert "Sciona passes her trial." in h and "Who sent the letter?" in h and "Thomil scouts." in h

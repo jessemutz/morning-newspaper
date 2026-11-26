@@ -111,7 +111,8 @@ def _ro(path):
     cache whenever either changes, and read the copy (SQLite folds the WAL in on open)."""
     import shutil
     src = Path(path)
-    cache = READING.parent / "dbcache"
+    # must be a local disk: SQLite cannot open a database on SMB (a run from the Mac)
+    cache = Path(CFG.get("db_cache_dir") or READING.parent / "dbcache")
     cache.mkdir(parents=True, exist_ok=True)
     stamp_parts = []
     for suffix in ("", "-wal"):

@@ -36,16 +36,18 @@ def model_for(task: str) -> str:
 
 
 def available(timeout: float = 10) -> bool:
-    """True if the server answers. llama-server exposes /health at the root, not under /v1."""
-    root = re.sub(r"/v1$", "", _base())
-    for url in (f"{root}/health", f"{_base()}/models"):
-        try:
-            r = requests.get(url, headers=_headers(), timeout=timeout)
-            if r.status_code == 200:
-                return True
-        except requests.RequestException:
-            continue
-    return False
+    """True if the server answers AND accepts our key. /models needs the key (/health does not,
+    so a wrong LLAMA_API_KEY used to pass this check and then fail every call)."""
+    import sys
+    try:
+        r = requests.get(f"{_base()}/models", headers=_headers(), timeout=timeout)
+    except requests.RequestException as e:
+        sys.stderr.write(f"llm: {_base()} unreachable ({type(e).__name__})\n")
+        return False
+    if r.status_code in (401, 403):
+        sys.stderr.write(f"llm: {_base()} rejected the API key (HTTP {r.status_code}): check LLAMA_API_KEY\n")
+        return False
+    return r.status_code == 200
 
 
 def chat(messages: list[dict], task: str = "rank", think: bool = False,

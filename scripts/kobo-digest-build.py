@@ -309,12 +309,23 @@ COVER_OUT = BASE / "cover.jpg"
 EDITION_FILE = BASE / "edition.txt"
 
 
-def _next_edition() -> int:
+def _edition_no() -> "tuple[int, str]":
+    """(last issue number, the day it was issued); edition.txt holds "N YYYY-MM-DD" (or just "N")."""
     try:
-        n = int(EDITION_FILE.read_text().strip()) + 1
-    except (OSError, ValueError):
-        n = 1
-    EDITION_FILE.write_text(str(n))
+        parts = EDITION_FILE.read_text().split()
+        return int(parts[0]), (parts[1] if len(parts) > 1 else "")
+    except (OSError, ValueError, IndexError):
+        return 0, ""
+
+
+def _next_edition() -> int:
+    """Next issue number; a rebuild on the same day keeps the number."""
+    from datetime import date
+    n, day = _edition_no()
+    today = date.today().isoformat()
+    if day != today:
+        n += 1
+    EDITION_FILE.write_text(f"{n} {today}")
     return n
 
 
@@ -428,7 +439,7 @@ def generate_cover(articles: list[dict]) -> "Path | None":
     from PIL import Image, ImageDraw, ImageFont, ImageOps
     try:
         W, H, M = 1264, 1680, 60
-        black, gray = (18, 18, 18), (95, 95, 95)
+        black, gray = (18, 18, 18), (40, 40, 40)  # e-ink washes out mid-grays
         img = Image.new("RGB", (W, H), "white")
         d = ImageDraw.Draw(img)
         y = 46
@@ -439,7 +450,7 @@ def generate_cover(articles: list[dict]) -> "Path | None":
         d.line([(M, y), (W - M, y)], fill=black, width=3)
         d.line([(M, y + 7), (W - M, y + 7)], fill=black, width=1)
         y += 22
-        tag = _font(SERIF_R, 26)
+        tag = _font(SERIF_R, 29)
         tagt = PAPER_TAGLINE
         d.text(((W - d.textlength(tagt, font=tag)) / 2, y), tagt, font=tag, fill=gray)
         y += 46
@@ -474,12 +485,12 @@ def generate_cover(articles: list[dict]) -> "Path | None":
             lead = ImageOps.fit(lead, (bw, bh), Image.LANCZOS)
             img.paste(lead, (M, y))
             y += bh + 8
-            cap = _font(SERIF_R, 18)
+            cap = _font(SERIF_R, 20)
             for line in _wrap(d, lead_art["title"], cap, W - 2 * M)[:1]:
                 d.text((M, y), line, font=cap, fill=gray)
             y += 30
         hl = _font(SERIF_B, 33)
-        sub = _font(SERIF_R, 20)
+        sub = _font(SERIF_R, 22)
         for a in articles:
             if y > H - 130:
                 break
@@ -501,9 +512,11 @@ def generate_cover(articles: list[dict]) -> "Path | None":
 
 def _fp_summary(html_text: str, max_sentences: int, max_chars: int) -> str:
     """First 1-3 sentences of an article, tags stripped, for a front-page teaser."""
+    import html as _h
     import re
-    txt = re.sub(r"<[^>]+>", " ", html_text or "")
-    txt = re.sub(r"\s+", " ", txt).strip()
+    txt = re.sub(r"<h[1-6]\b.*?</h[1-6]>", " ", html_text or "", flags=re.S | re.I)  # section heads
+    txt = re.sub(r"<[^>]+>", " ", txt)
+    txt = _h.unescape(re.sub(r"\s+", " ", txt)).strip()
     out, sents = "", 0
     for p in re.split(r"(?<=[.!?])\s+", txt):
         if not p:
@@ -535,7 +548,7 @@ def build_front_page(book, articles: list[dict]):
 
     W, M = 1264, 44
     CW = W - 2 * M
-    BLACK, GRAY = (17, 17, 17), (90, 90, 90)
+    BLACK, GRAY = (17, 17, 17), (40, 40, 40)  # e-ink washes out mid-grays
     blocks = []  # (href_img, article_href_or_None, pil)
 
     def lh(font, extra=6):
@@ -565,7 +578,7 @@ def build_front_page(book, articles: list[dict]):
     except ValueError:
         dateline = _dt.strftime("%A, %B %d, %Y").upper()
     try:
-        edition = int(EDITION_FILE.read_text().strip())
+        edition = _edition_no()[0] or 1
     except Exception:
         edition = 1
 
@@ -598,7 +611,7 @@ def build_front_page(book, articles: list[dict]):
     d.text(((W - d.textlength(PAPER_TITLE, font=mast)) / 2, y), PAPER_TITLE, font=mast, fill=BLACK)
     y += mast.getbbox("Tg")[3] + 24
     d.line([(M, y), (W - M, y)], fill=BLACK, width=4); d.line([(M, y + 9), (W - M, y + 9)], fill=BLACK, width=1); y += 28
-    tag = _font(SERIF_R, 30)
+    tag = _font(SERIF_R, 33)
     d.text(((W - d.textlength(PAPER_TAGLINE, font=tag)) / 2, y), PAPER_TAGLINE, font=tag, fill=GRAY); y += 50
     d.line([(M, y), (W - M, y)], fill=BLACK, width=1); y += 12
     small = _font(SERIF_R, 23)
@@ -610,14 +623,14 @@ def build_front_page(book, articles: list[dict]):
     if lead:
         hl = _font(SERIF_B, 58)
         y = wrap_draw(d, lead["title"], hl, M, y, CW, BLACK, 6); y += 8
-        sum_f = _font(SERIF_R, 27); cont_f = _font(SERIF_R, 23)
-        ls_h = len(_wrap(d, _fp_summary(lead["html"], 3, 300), sum_f, CW)[:3]) * lh(sum_f, 8)
+        sum_f = _font(SERIF_R, 30); cont_f = _font(SERIF_R, 23)
+        ls_h = len(_wrap(d, _fp_summary(lead.get("teaser") or lead["html"], 3, 300), sum_f, CW)[:3]) * lh(sum_f, 8)
         photo_h = max(320, min(760, 1590 - y - ls_h - lh(cont_f, 12) - 16))
         im = _download_image(lead.get("image")) if lead_photo_ok else None
         if im:
             im = ImageOps.fit(im.convert("L"), (CW, photo_h), Image.LANCZOS)
             img.paste(im.convert("RGB"), (M, y)); y += photo_h + 12
-        y = wrap_draw(d, _fp_summary(lead["html"], 3, 300), sum_f, M, y, CW, GRAY, 8, 3); y += 2
+        y = wrap_draw(d, _fp_summary(lead.get("teaser") or lead["html"], 3, 300), sum_f, M, y, CW, GRAY, 8, 3); y += 2
         _dl = _fmt_date(lead)
         d.text((M, y), (f"{_dl}   \u00b7   " if _dl else "") + f"Continued on page {page_of[lead_i]}",
                font=cont_f, fill=BLACK); y += lh(cont_f, 12)
@@ -637,10 +650,10 @@ def build_front_page(book, articles: list[dict]):
             text_x = M + thumb_w + 24; text_w = W - M - text_x
         hl = _font(SERIF_B, 37)
         ty = wrap_draw(d, a["title"], hl, text_x, y, text_w, BLACK, 4); ty += 4
-        ty = wrap_draw(d, _fp_summary(a["html"], 2, 200), _font(SERIF_R, 24), text_x, ty, text_w, GRAY, 6, 3)
+        ty = wrap_draw(d, _fp_summary(a.get("teaser") or a["html"], 2, 200), _font(SERIF_R, 27), text_x, ty, text_w, GRAY, 6, 3)
         yb = max(ty, y + thumb_h) + 6
         _meta = "   ".join(x for x in [a['domain'], _fmt_date(a), f"{reading_minutes(_text_words(a['html']))} min", f"Continued on page {page_of[i]}"] if x)
-        d.text((M, yb), _meta, font=_font(SERIF_R, 21), fill=GRAY); yb += lh(_font(SERIF_R, 21), 12)
+        d.text((M, yb), _meta, font=_font(SERIF_R, 23), fill=GRAY); yb += lh(_font(SERIF_R, 23), 12)
         add(img, yb, f"art_{i}.xhtml")
 
     # ---- ROUNDUP blocks (styled, not a plain list) ----
@@ -656,7 +669,7 @@ def build_front_page(book, articles: list[dict]):
             hl = _font(SERIF_B, 32)
             y = wrap_draw(d, a["title"], hl, M, y, CW, BLACK, 4); y += 2
             _rmeta = "   ".join(x for x in [a['domain'], _fmt_date(a), f"{reading_minutes(_text_words(a['html']))} min", f"page {page_of[i]}"] if x)
-            d.text((M, y), _rmeta, font=_font(SERIF_R, 21), fill=GRAY); y += lh(_font(SERIF_R, 21), 12)
+            d.text((M, y), _rmeta, font=_font(SERIF_R, 23), fill=GRAY); y += lh(_font(SERIF_R, 23), 12)
             d.line([(M, y), (W - M, y)], fill=BLACK, width=1); y += 8
             add(img, y, f"art_{i}.xhtml")
 
@@ -779,7 +792,7 @@ def build_epub(articles: list[dict]) -> None:
         disp_title = f"{a['title']} ({full_min} min)"
         ch = epub.EpubHtml(title=disp_title, file_name=f"art_{i}.xhtml", lang="en")
         head = (f"<h1>{a['title']}</h1>"
-                f"<p style='color:#666'>{a['domain']} &middot; {a.get('published','')}"
+                f"<p style='color:#333'>{a['domain']} &middot; {a.get('published','')}"
                 f" &middot; {full_min} min &middot; <a href='{a['url']}'>source</a></p><hr/>")
         # "More in this edition" footer: real cross-navigation between articles AND it
         # pads every chapter past ~5000 characters. The Kobo shows a footnote-style
@@ -791,12 +804,12 @@ def build_epub(articles: list[dict]) -> None:
         if CFG["delivery"] == "kobo":
             others = "".join(
                 f"<p style='margin:.4em 0'><a href='art_{j}.xhtml'>{_hh.escape(o['title'])}</a>"
-                f"<br/><span style='color:#666'>{_hh.escape(o['domain'])} &middot; "
+                f"<br/><span style='color:#333'>{_hh.escape(o['domain'])} &middot; "
                 f"{reading_minutes(_text_words(o['html']))} min</span><br/>"
                 f"{_hh.escape(_fp_summary(o['html'], 2, 240))}</p>"
                 for j, o in enumerate(articles) if j != i)
             footer = (f"<hr/><h2>More in this edition</h2>{others}"
-                      f"<p style='color:#666'>{_hh.escape(PAPER_TITLE)} &middot; refreshed daily.</p>")
+                      f"<p style='color:#333'>{_hh.escape(PAPER_TITLE)} &middot; refreshed daily.</p>")
         content = f"{head}{body_html}{footer}"
         # HARD FLOOR: the Kobo pops up a footnote preview (instead of navigating) when a
         # link target is under ~5000 chars. The footer usually clears it, but very short

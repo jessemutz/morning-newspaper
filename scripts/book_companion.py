@@ -17,6 +17,10 @@ Spoiler safety: the LLM only ever sees the book's text up to just before your po
 told to use nothing else. Facts about the author come from Wikipedia, and outside articles
 must pass the spoiler check.
 
+On a day without a fresh recap (no new reading, or the LLM is down) the book you are reading still
+gets a page: progress, pages read since the last recap, where you left off, who's who and the
+story so far from the last companion. Every edition has one.
+
 State per book: reading/companion/<md5>.json.
 """
 import hashlib
@@ -405,7 +409,7 @@ def render(title: str, authors: str, book: dict, c: dict, sessions: list[dict], 
         parts.append("<h2>For your next session</h2>" + _ul(c["tips"], e))
     if bio and bio.get("text"):
         parts.append(f"<h2>About the author</h2><p>{e(bio['text'])}</p>"
-                     f"<p style='color:#666'>From Wikipedia</p>")
+                     f"<p style='color:#333'>From Wikipedia</p>")
     if not first:
         parts.append("<h2>The story so far</h2>" + "".join(
             f"<p>{e(p)}</p>" for p in c.get("story_so_far", "").split("\n") if p.strip()))
@@ -486,11 +490,20 @@ def companion_for(book: dict, now: datetime) -> "dict | None":
         "image": str(path.parent / "cover.jpg") if (path.parent / "cover.jpg").exists() else None,
         "pin_top": True,
         "pin_order": 0,
+        "full": True,  # a real recap: a later run today must not replace it with the short page
         "html": render(title, authors, book, c, st["sessions"], st.get("author_bio"), first),
+        # front-page teaser: where you are, then the start of the recap
+        "teaser": f"{(book.get('percent') or 0) * 100:.0f}% read"
+                  + (f", now at {book['chapter']}" if book.get("chapter") else "") + ". "
+                  + " ".join(c.get("recap", [])[:1]),
     }
     save_article(art, f"companion-{md5[:12]}-{day}.json")
     st.update({"covered_pct": target, "story_so_far": c.get("story_so_far") or prior, "title": title,
-               "kind": c.get("kind"), "last_day": day, "updated": now.isoformat(timespec="seconds")})
+               "kind": c.get("kind"), "last_day": day, "updated": now.isoformat(timespec="seconds"),
+               # reused by the daily page on days without a fresh companion (all spoiler-safe:
+               # written from text before covered_pct)
+               "last_companion": {k: c.get(k) for k in ("key_points", "people", "terms", "threads", "quotes")},
+               "image": art["image"]})
     for extra in behind_the_book(st, title, authors, target, now):
         save_article(extra, f"behind-{hashlib.sha1(extra['url'].encode()).hexdigest()[:12]}.json")
     COMPANION.mkdir(parents=True, exist_ok=True)
@@ -499,18 +512,146 @@ def companion_for(book: dict, now: datetime) -> "dict | None":
     return art
 
 
+def daily_page(book: dict, now: datetime, llm_up: bool) -> dict:
+    """The reading page on a day without a fresh companion: where you are, what you read since,
+    and what the companion already knows (the story so far, people, threads). Needs no LLM and
+    never goes past covered_pct, so it is as spoiler-safe as the last companion."""
+    e = html.escape
+    md5, title, authors = book["md5"], book.get("title") or "Untitled", book.get("authors") or ""
+    st = load_state(md5)
+    day = now.date().isoformat()
+    pct = (book.get("percent") or 0) * 100
+    head = f"<p><em>{e(authors)}</em> &middot; {pct:.0f}% read"
+    if book.get("page") and book.get("pages"):
+        head += f" &middot; page {book['page']} of {book['pages']}"
+    if book.get("chapter"):
+        head += f" &middot; now at <em>{e(book['chapter'])}</em>"
+    parts = [head + "</p>"]
+
+    days = book.get("days") or {}
+    stats = book.get("stats") or {}
+    recent = sorted(d for d in stats if d < day)[-1:]  # the last day you read before today
+    since = st.get("last_day")
+    pages, minutes = session_stats(book, since)
+    new_pct = (book.get("percent") or 0) - float(CFG["companion_safety_pct"]) / 100 - st.get("covered_pct", 0)
+    parts.append("<h2>Since the last recap</h2>")
+    if new_pct >= MIN_NEW_PCT:
+        bits = [f"You read on from {st.get('covered_pct', 0) * 100:.0f}% to {pct:.0f}%"]
+        if pages:
+            bits.append(f"{pages} pages")
+        if minutes:
+            bits.append(f"{minutes} min")
+        parts.append(f"<p>{', '.join(bits)}.</p>")
+        why = ("the recap writer (the LLM on the Mac) was not reachable this morning" if not llm_up
+               else "the recap could not be written this morning")
+        parts.append(f"<p><em>No recap of those pages today: {why}. The next edition covers them "
+                     "together with whatever you read tonight.</em></p>")
+    else:
+        last = recent[0] if recent else (max(days) if days else None)
+        when = datetime.fromisoformat(last).strftime("%A, %B %-d") if last else "a while"
+        parts.append(f"<p>No new reading since {e(when)}. Here is where you left off.</p>")
+
+    sessions = st.get("sessions") or []
+    if sessions and sessions[-1].get("summary"):
+        s0 = sessions[-1]
+        parts.append(f"<h2>Where you left off</h2><p>{e(s0['summary'])}</p>")
+    lc = st.get("last_companion") or {}
+    fiction = st.get("kind") != "nonfiction"
+    if lc.get("people"):
+        parts.append(f"<h2>{'Who&rsquo;s who' if fiction else 'People'}</h2>" + _ul(
+            lc["people"], lambda x: f"<b>{e(x['name'])}</b>: {e(x['note'])}"))
+    if lc.get("threads"):
+        parts.append(f"<h2>{'Open threads' if fiction else 'Questions to consider'}</h2>" + _ul(lc["threads"], e))
+    if lc.get("terms"):
+        parts.append("<h2>Places, terms &amp; ideas</h2>" + _ul(
+            lc["terms"], lambda x: f"<b>{e(x['name'])}</b>: {e(x['note'])}"))
+    if st.get("story_so_far"):
+        parts.append("<h2>The story so far</h2>" + "".join(
+            f"<p>{e(p)}</p>" for p in st["story_so_far"].split("\n") if p.strip()))
+    if len(sessions) > 0:
+        parts.append("<h2>Your reading log</h2>" + _ul(sessions[-SESSIONS_SHOWN:][::-1], lambda x: (
+            f"<b>{e(x['label'])}</b> ({x['from'] * 100:.0f}% &rarr; {x['to'] * 100:.0f}%"
+            f"{', ' + str(x['pages']) + ' pages' if x.get('pages') else ''}"
+            f"{', ' + str(x['minutes']) + ' min' if x.get('minutes') else ''})")))
+    if "author_bio" not in st:
+        st["author_bio"] = author_bio(authors)
+        if st.get("covered_pct") or st.get("author_bio"):
+            COMPANION.mkdir(parents=True, exist_ok=True)
+            (COMPANION / f"{md5}.json").write_text(json.dumps(st, indent=2, ensure_ascii=False))
+    bio = st.get("author_bio")
+    if bio and bio.get("text"):
+        parts.append(f"<h2>About the author</h2><p>{e(bio['text'])}</p>"
+                     f"<p style='color:#333'>From Wikipedia</p>")
+    if not st.get("story_so_far"):
+        parts.append("<p><em>The companion has not recapped this book yet; the first recap comes "
+                     "with the next edition after you read on.</em></p>")
+
+    image = st.get("image")
+    if not image or not Path(image).exists():  # paths differ between the NAS and the Mac
+        path = ks.find_book_file(md5, title, authors)
+        if path and (path.parent / "cover.jpg").exists():
+            image = str(path.parent / "cover.jpg")
+    return {
+        "url": f"morning-paper://companion/{md5}/{day}",
+        "title": f"Your reading: {title}",
+        "domain": "Your reading",
+        "published": day,
+        "saved": now.isoformat(),
+        "image": image,
+        "pin_top": True,
+        "pin_order": 0,
+        "html": "".join(parts),
+        "teaser": f"{pct:.0f}% read" + (f", now at {book['chapter']}" if book.get("chapter") else "")
+                  + ". " + (re.sub(r"<[^>]+>", "", parts[2]) if len(parts) > 2 else ""),
+    }
+
+
+def books_for_today(now: datetime) -> "tuple[list[dict], dict | None]":
+    """(books read in the last 3 days, the book to feature every day).
+
+    The featured book is the most recently touched one you are properly into (>= 1%), so
+    opening a new book for a minute does not push the one you are reading off the page."""
+    recent = ks.currently_reading(days=3, now=now)
+    month = ks.currently_reading(days=60, now=now)
+    started = [b for b in month if (b.get("percent") or 0) >= 0.01]
+    return recent, (started or month or [None])[0]
+
+
 def main() -> int:
     if not CFG["companion_enabled"]:
         return 0
-    if not llm.available():
-        log("LLM unavailable; no companion today (progress is kept, tomorrow covers both days)")
-        return 0
     now = datetime.now(timezone.utc)
-    for book in ks.currently_reading(days=3, now=now):
+    llm_up = llm.available()
+    if not llm_up:
+        log("LLM unavailable; no fresh recap today (progress is kept, the next one covers both days)")
+    recent, featured = books_for_today(now)
+    written = set()
+    if llm_up:
+        for book in recent:
+            try:
+                if companion_for(book, now):
+                    written.add(book["md5"])
+            except Exception as e:
+                log(f"'{book.get('title')}' failed: {type(e).__name__}: {str(e)[:200]}")
+    # Every edition carries the book you are reading, recap or not.
+    daily = [b for b in recent if (b.get("percent") or 0) >= 0.01]
+    if featured and featured["md5"] not in {b["md5"] for b in daily}:
+        daily.insert(0, featured)
+    for book in daily:
+        if book["md5"] in written:
+            continue
+        existing = ARTICLES / f"companion-{book['md5'][:12]}-{now.date().isoformat()}.json"
         try:
-            companion_for(book, now)
+            if existing.exists() and json.loads(existing.read_text()).get("full"):
+                continue  # today's recap was already written by an earlier run
+        except ValueError:
+            pass
+        try:
+            art = daily_page(book, now, llm_up)
+            save_article(art, f"companion-{book['md5'][:12]}-{now.date().isoformat()}.json")
+            log(f"wrote reading page for '{book.get('title')}' (no fresh recap today)")
         except Exception as e:
-            log(f"'{book.get('title')}' failed: {type(e).__name__}: {str(e)[:200]}")
+            log(f"reading page for '{book.get('title')}' failed: {type(e).__name__}: {str(e)[:200]}")
     return 0
 
 

@@ -30,6 +30,9 @@ Kindle running KOReader with a custom plugin, a small HTTP server, a local LLM. 
    from Wikipedia only (never model memory: it hallucinated). "Behind the book": search
    (Kagi/SearXNG) → fetch → LLM spoiler check against story-so-far → max 2/day, pool refreshed weekly.
    State: `reading/companion/<md5>.json` (covered_pct, story_so_far, sessions, author_bio, behind_*).
+   Every edition gets a page for the book being read: with no new reading or no LLM, `daily_page()`
+   builds "Your reading: …" from saved state (`last_companion`, story_so_far; never past
+   covered_pct). A same-day rerun never replaces a `full` recap.
 6. `sports.py`: config `sports: [{"league","follow":[...]}, ...]`. ESPN public site API for team
    leagues (`LEAGUES` map; `"espn": "sport/league"` override), Jolpica/Ergast for F1 + ESPN F1 news.
    Name matching is substring of follow-in-name; abbreviations only by exact match (the "LA" in
@@ -46,7 +49,9 @@ Kindle running KOReader with a custom plugin, a small HTTP server, a local LLM. 
    JPEG ≤1000×1300, min side 200px, ≤6/article; local paths allowed (book covers).
 
 Special article JSON (same shape as fetched ones, in `articles/`): url `morning-paper://...`,
-`pin_top`/`pin_bottom`, `pin_order`, `published` = today (only today's specials enter an edition).
+`pin_top`/`pin_bottom`, `pin_order`, `published` = today (only today's specials enter an edition). Optional `teaser`:
+front-page text instead of the first sentences of `html`. `edition.txt` = "N YYYY-MM-DD": same-day
+rebuilds keep the issue number.
 
 ## Delivery
 - `scripts/paper_server.py` (stdlib, needs `PAPER_TOKEN`): `POST /api/progress`, `GET /api/manifest`,
@@ -75,12 +80,15 @@ into `<data_dir>/dbcache/` when mtime/size change and reads the copy. Never writ
 `chat_template_kwargs.enable_thinking` per call, `json_schema` response_format. Under a JSON
 grammar put a reason field BEFORE a score (else the model copies the previous row's score:
 the all-zeros bug). Empty content + finish_reason=length → thinking ate `max_tokens`.
-Models are configured per task in `llm_models` (`rank`, `write`).
+Models are configured per task in `llm_models` (`rank`, `write`). `llm.available()` checks `/v1/models`
+(needs the key; `/health` does not, so a wrong key used to look "up").
 
 ## Config / run / test
 - Config lookup: `KOBO_PAPER_CONFIG` → `./config.json` → repo root. Defaults + comments: `scripts/kobo_config.py`.
 - Local run: `KOBO_PAPER_CONFIG=$PWD/config.mac.json .venv/bin/python scripts/run_daily.py`
 - Single steps: run any script directly with the same env var.
+- Running against the NAS data from the Mac: translate paths in a copy of its config and set
+  `db_cache_dir` to a LOCAL dir (SQLite cannot open the db copies on SMB).
 - Rebuild today's edition after a code change without re-curating: copy URLs from today's
   `seen.jsonl` rows back into `queue.txt`, empty `seen.jsonl`, run `kobo-digest-build.py`.
 - Tests: `.venv/bin/python -m pytest -q` (no network/LLM). `tests/test_koreader.py` uses an `env`
